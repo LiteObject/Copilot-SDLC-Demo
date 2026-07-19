@@ -25,6 +25,10 @@
 .PARAMETER Force
     Refresh unchanged template-owned files. Project-owned files are preserved.
 
+.PARAMETER ValidateConfig
+    Run the installed Phase 1 configuration validator and fail if adoption is
+    not configured yet.
+
 .EXAMPLE
     ./tools/scaffold-sdlc.ps1 -Target ../my-project
 
@@ -44,7 +48,9 @@ param(
     [Alias('Variables')]
     [string[]] $Variable = @(),
 
-    [switch] $Force
+    [switch] $Force,
+
+    [switch] $ValidateConfig
 )
 
 $ErrorActionPreference = 'Stop'
@@ -640,4 +646,14 @@ Write-Host "  recorded installer ownership in $StateRelativePath"
 Write-Host ""
 Write-Host "Done. Wrote $written file(s); left $leftUntouched existing file(s) untouched."
 Write-Host "Use -Force to refresh only files that are still installer-owned and unchanged."
+if ($ValidateConfig) {
+    $validatorPath = Join-Path $TargetRoot 'scripts/validate-sdlc-config.ps1'
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $validatorPath -RepoRoot $TargetRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw "SDLC configuration validation failed. Edit '$TargetRoot/.github/sdlc-config.yml' and rerun with -ValidateConfig."
+    }
+}
+else {
+    Write-Host "[INCOMPLETE] Run scripts/validate-sdlc-config.ps1 after configuring .github/sdlc-config.yml. Use -ValidateConfig to enforce this during scaffolding."
+}
 Write-Host "Open '$TargetRoot' in VS Code and reload the window to pick up the agents."

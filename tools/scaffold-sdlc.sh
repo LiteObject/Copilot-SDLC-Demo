@@ -7,13 +7,14 @@ usage() {
 Installs the Copilot SDLC base payload into a target folder.
 
 Usage:
-  ./tools/scaffold-sdlc.sh <target> [--extension <name>] [--force]
+  ./tools/scaffold-sdlc.sh <target> [--extension <name>] [--force] [--validate-config]
 
 Options:
   --template <name>       Template name; base is currently available.
   --extension <name>      Install an extension from template/extensions.
   --variable Name=Value   Render a template variable.
   --force                 Refresh unchanged template-owned files.
+  --validate-config       Run the installed config validator and fail until configured.
 EOF
 }
 
@@ -23,6 +24,7 @@ if (( BASH_VERSINFO[0] < 4 )); then
 fi
 
 FORCE=0
+VALIDATE_CONFIG=0
 TARGET=''
 TEMPLATE='base'
 EXTENSIONS=()
@@ -32,6 +34,10 @@ while (( $# > 0 )); do
   case "$1" in
     --force)
       FORCE=1
+      shift
+      ;;
+    --validate-config)
+      VALIDATE_CONFIG=1
       shift
       ;;
     --template)
@@ -468,4 +474,10 @@ echo "  recorded installer ownership in $STATE_RELATIVE"
 echo
 echo "Done. Wrote $written file(s); left $untouched existing file(s) untouched."
 echo "Project-owned files are preserved; use --force to refresh unchanged template-owned files."
+if (( VALIDATE_CONFIG == 1 )); then
+  bash "$TARGET_ROOT/scripts/validate-sdlc-config.sh" --repo-root "$TARGET_ROOT"
+  echo "Configuration validation passed."
+else
+  echo "[INCOMPLETE] Run scripts/validate-sdlc-config.sh after configuring .github/sdlc-config.yml. Use --validate-config to enforce this during scaffolding."
+fi
 echo "Open '$TARGET_ROOT' in VS Code and reload the window to pick up the agents."

@@ -1,0 +1,32 @@
+name: Phase 1 Configured Validation
+
+on:
+    push:
+    pull_request:
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    bash:
+        name: Bash config and task validation
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Run Phase 1 config and task tests
+              shell: bash
+              run: bash tests/phase1/run-tests.sh
+
+    powershell:
+        name: PowerShell config and task validation
+        runs-on: windows-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Run Phase 1 config and task tests
+              shell: pwsh
+              run: ./tests/phase1/run-tests.ps1

@@ -121,7 +121,7 @@ This maps the multi-agent design onto Copilot's **native** features — no web s
 
 | Design concept | Implementation |
 |----------------|----------------|
-| **Supervisor** | A custom agent (`.agent.md`) that owns the state machine (`GATHERING_REQS → PLANNING → CODING → REVIEW → TESTING → [DEPLOYMENT_READINESS]`) and delegates |
+| **Supervisor** | A custom agent (`.agent.md`) that owns and applies validator-approved state transitions (`GATHERING_REQS → PLANNING → CODING → REVIEW → TESTING → [DEPLOYMENT_READINESS]`) |
 | **PM worker** | Subagent for requirements / clarifying questions |
 | **Designer worker** | Subagent for UI/UX flows, screen states, and accessibility (frontend projects only) |
 | **Architect worker** | Subagent for file structure + tech-stack spec |
@@ -129,7 +129,7 @@ This maps the multi-agent design onto Copilot's **native** features — no web s
 | **Reviewer worker** | Subagent that reviews code for quality, security, and standards before testing |
 | **QA worker** | Subagent that writes tests, runs them, reports failures |
 | **Shared rules** | `.github/copilot-instructions.md` + `.instructions.md` files with conventions all agents obey (an `AGENTS.md` at the repo root is an equivalent alternative this repo does not use) |
-| **State** | Lives in the conversation + a tracked spec/todo file (no database needed) |
+| **State** | Lives in a tracked spec/todo file; YAML front matter is authoritative and the visible Markdown sections are human-readable evidence |
 | **Repeatable kickoffs** | Prompt files (`.prompt.md`) such as "start new feature" |
 | **Test/fix loop** | QA agent runs the suite in the integrated terminal, feeds failures back to the Developer agent |
 | **Full autonomy (optional)** | Push to GitHub and hand off to the Copilot coding agent for PR-based fixes |
@@ -161,6 +161,9 @@ template/
                      sdlc-config.yml
               docs/spec.md
               scripts/check-phase.*
+              scripts/migrate-spec.*
+              scripts/validate-sdlc-config.*
+              scripts/run-sdlc-task.*
               scripts/scope-audit.*
        extensions/
               frontend/.github/instructions/
@@ -170,6 +173,10 @@ tools/
        scaffold-sdlc.ps1                    # Windows/PowerShell installer
        scaffold-sdlc.sh                     # Bash installer
 ```
+
+The authoring repository also runs the Phase 0 and Phase 1 validator, migration,
+and task suites from `.github/workflows/phase0-validation.yml` and
+`.github/workflows/phase1-validation.yml` on native Ubuntu and Windows runners.
 
 After installation, `template/base/.github/agents/` becomes `.github/agents/`
 at the target root. The base payload remains independent of a specific language
@@ -184,6 +191,8 @@ extensions so a target repository receives only the capabilities it selects.
 - Owns the state machine: `GATHERING_REQS → PLANNING → CODING → REVIEW → TESTING → [DEPLOYMENT_READINESS] → DONE`.
 - Decides which worker to delegate to based on current state and user input.
 - Maintains a tracked spec/todo file as the source of truth for project state.
+- Records gate command, result, exit code, timestamp, revision, and evidence, then runs `check-phase` before applying a transition.
+- Is the only agent allowed to mutate `current_phase`, `review_cycle`, gate records, and `last_transition_*` metadata.
 
 ### 6.2 PM agent
 - Gathers and clarifies requirements.
@@ -206,25 +215,32 @@ extensions so a target repository receives only the capabilities it selects.
 - Reviews the Developer's code against the coding standards and security (OWASP Top 10) concerns.
 - For UI code, checks the implementation against the Design section and the frontend UX & accessibility standards.
 - Checks spec fidelity and maintainability; approves or routes specific change requests back to the Developer via the Supervisor.
+- Returns `PASS` or `CHANGES_REQUESTED` with revision-bound evidence; it does not mutate workflow state.
 
 ### 6.7 QA agent
 - Writes unit tests and covers edge cases.
 - Runs the test suite in the integrated terminal.
 - Reports failures back so the Supervisor can route to the Developer agent for a patch.
+- Returns `PASS` or `FAIL` with revision-bound evidence; it does not mark the workflow `DONE`.
 
 ### 6.8 Shared rules & prompts
 - `copilot-instructions.md`: conventions every agent obeys (this repo's shared-rules file; an `AGENTS.md` at the repo root is an equivalent alternative).
 - `.instructions.md` files scoped via `applyTo` for coding, testing, optional frontend UX, and optional deployment-readiness standards.
 - `.prompt.md` files for repeatable kickoffs (new feature, fix failing tests).
 
+### 6.9 Configured validation
+- `.github/sdlc-config.yml` uses schema version 1 and a named task registry with structured executable/args records.
+- `validate-sdlc-config` validates package-manager compatibility, manifests, test directories, task completeness, and executable availability.
+- `run-sdlc-task` invokes the same named tasks locally and in CI, retaining logs and JSON evidence tied to the source revision.
+
 ---
 
 ## 7. Test / Fix Loop
 
-1. **QA agent** runs the test suite in the integrated terminal.
+1. **QA agent** runs the test suite in the integrated terminal and records a gate result.
 2. On failure, it captures the error output and reports it to the **Supervisor**.
-3. The Supervisor routes the failure to the **Developer agent** to issue a patch.
-4. Loop repeats (`CODING → REVIEW → TESTING`) until tests pass.
+3. The Supervisor validates `TESTING → CODING` and routes the failure to the **Developer agent** to issue a patch.
+4. Loop repeats (`CODING → REVIEW → TESTING`) until tests pass; the Supervisor then validates either `TESTING → DEPLOYMENT_READINESS` or `TESTING → DONE`.
 5. **Optional full autonomy:** push to GitHub and assign the issue to the **Copilot coding agent**, which opens a PR, lets CI run, and iterates on fixes.
 
 ---

@@ -1,0 +1,18 @@
+sdlc_config_schema: 2
+stack:
+  languages: [javascript]
+  frameworks: []
+  package_manager: none
+  package_manifest: none
+testing:
+  framework: ""
+  directories:
+    - missing-tests/
+validation:
+  required_tasks: [build]
+  optional_tasks: []
+  install_task: install
+tasks:
+  build:
+    executable: bash
+    args: [--version]

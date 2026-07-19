@@ -43,6 +43,11 @@ actually configured and run.
 
 ## Phase 0: Workflow Integrity
 
+> Implementation status: complete. Versioned spec metadata, transition checks,
+> revision-bound gate validation, exact scope policy, legacy-spec migration,
+> cross-platform regression fixtures, and native Windows/Linux CI validation
+> are implemented.
+
 ### Objective
 
 Make the documented state machine authoritative and make every gate evaluate
@@ -94,10 +99,28 @@ actual evidence rather than the presence of text in a Markdown section.
 |---|---|
 | Agent behavior | `.github/agents/sdlc-supervisor.agent.md`, `qa.agent.md`, `reviewer.agent.md` |
 | State and evidence | `docs/spec.md` and its documented schema |
-| Deterministic checks | `scripts/check-phase.ps1`, `scripts/check-phase.sh`, `scripts/scope-audit.ps1`, `scripts/scope-audit.sh` |
-| Regression coverage | A script-test fixture directory and automated tests for both script variants |
+| Deterministic checks | `scripts/check-phase.ps1`, `scripts/check-phase.sh`, `scripts/migrate-spec.ps1`, `scripts/migrate-spec.sh`, `scripts/scope-audit.ps1`, `scripts/scope-audit.sh` |
+| Regression coverage | `tests/fixtures/phase0/` and automated tests for both validator and migration variants |
+| CI validation | `.github/workflows/phase0-validation.yml` runs native Bash/Ubuntu and PowerShell/Windows checks |
+
+Phase 1 surfaces:
+
+| Area | Implemented surface |
+|---|---|
+| Configuration contract | `template/base/.github/sdlc-config.yml` with `sdlc_config_schema: 1` and structured `tasks` |
+| Deterministic validation | `template/base/scripts/validate-sdlc-config.ps1` and `.sh` |
+| Named task execution | `template/base/scripts/run-sdlc-task.ps1` and `.sh` |
+| Evidence | `.sdlc/evidence/` JSON records and task logs; `gate_<task>_*` spec fields |
+| Compatibility | `docs/guides/validation-compatibility.md` |
+| Adoption | `tools/scaffold-sdlc.ps1 -ValidateConfig` and `tools/scaffold-sdlc.sh --validate-config` |
+| Regression coverage | `tests/fixtures/phase1/` and `tests/phase1/` |
+| CI validation | `.github/workflows/phase1-validation.yml` plus the updated GitHub Actions extension |
 
 ## Phase 1: Configured, Reproducible Validation
+
+> Implementation status: complete. The versioned config contract, native
+> validators, structured task runner, evidence records, compatibility guide,
+> scaffold enforcement switch, and CI integration are implemented.
 
 ### Objective
 
@@ -106,24 +129,23 @@ that works the same way on a developer machine and in CI.
 
 ### Limitations Addressed
 
-- The template has blank build, test, and lint values until each adopting
-  project configures them.
-- CI currently runs only a configured test command after a labeled issue and
-  does not install dependencies, build, lint, type-check, or record gate
-  evidence.
-- Command execution should not rely on shell `eval` for configuration values.
+- The template remains visibly incomplete until each adopting project configures
+   the versioned schema, package manifest, framework, test directories, and
+   named validation tasks.
+- CI must use the same named task runner as local validation, including install,
+   build, test, lint, type-check, and retained gate evidence where configured.
+- Task execution must not rely on shell `eval` or arbitrary command strings.
 
 ### Implementation Work
 
-1. Define a versioned schema for `.github/sdlc-config.yml` with required
-   commands for build, test, lint, and type-check where the selected stack
-   supports them.
+1. Define a versioned schema for `.github/sdlc-config.yml` with required task
+   IDs for build and test, optional lint/type-check IDs, package-manager and
+   manifest fields, and an evidence directory.
 2. Add `validate-sdlc-config.ps1` and `validate-sdlc-config.sh` to verify the
    schema, command presence, supported package manager, test directories, and
    deployment-gate prerequisites before agents start implementation.
-3. Define a small, named task registry instead of interpolating arbitrary shell
-   code. For example, the config selects `test`, `build`, and `lint` tasks and
-   a runner maps each task to an explicitly documented command.
+3. Define a small, named task registry where each task is an executable plus an
+   argument list. The runner invokes the structured argv directly.
 4. Update the scaffold script to require or guide stack configuration during
    adoption, and leave a project visibly incomplete until validation succeeds.
 5. Run the same validation runner locally, in pull requests, and in the
@@ -135,8 +157,9 @@ that works the same way on a developer machine and in CI.
 
 ### Completion Criteria
 
-- A new adoption fails fast with an actionable error until required stack
-  configuration is complete.
+- A new adoption remains visibly incomplete and can fail fast with an actionable
+   error when `-ValidateConfig` or `--validate-config` is selected until required
+   stack configuration is complete.
 - Local and CI execution invoke the same named validation tasks.
 - The CI workflow installs declared dependencies, validates configuration, and
   runs each required task without `eval`.

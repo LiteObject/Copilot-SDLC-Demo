@@ -17,6 +17,12 @@ base:
     - docs/spec.md
     - scripts/check-phase.ps1
     - scripts/check-phase.sh
+    - scripts/migrate-spec.ps1
+    - scripts/migrate-spec.sh
+    - scripts/validate-sdlc-config.ps1
+    - scripts/validate-sdlc-config.sh
+    - scripts/run-sdlc-task.ps1
+    - scripts/run-sdlc-task.sh
     - scripts/scope-audit.ps1
     - scripts/scope-audit.sh
 
@@ -40,6 +46,12 @@ ownership:
     - .github/workflows/**
     - scripts/check-phase.ps1
     - scripts/check-phase.sh
+    - scripts/migrate-spec.ps1
+    - scripts/migrate-spec.sh
+    - scripts/validate-sdlc-config.ps1
+    - scripts/validate-sdlc-config.sh
+    - scripts/run-sdlc-task.ps1
+    - scripts/run-sdlc-task.sh
     - scripts/scope-audit.ps1
     - scripts/scope-audit.sh
   project_owned:

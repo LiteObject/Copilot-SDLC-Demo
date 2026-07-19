@@ -6,6 +6,7 @@
 # From the template authoring repository, scaffold this into your project with:
 #   ./tools/scaffold-sdlc.ps1 -Target ../my-project
 # Then edit this file to match your stack.
+sdlc_config_schema: 1
 
 # ── Stack ───────────────────────────────────────────
 stack:
@@ -19,11 +20,8 @@ stack:
 
   # Package manager / build tool.
   package_manager: npm
-  # Examples: npm, yarn, pnpm, pip, cargo, dotnet
-
-  # The command that produces a clean build (zero errors).
-  build_command: ""
-  # Examples: npm run build, dotnet build, cargo build, make
+  # Supported values: npm, yarn, pnpm, pip, poetry, cargo, dotnet, go, none.
+  package_manifest: package.json
 
 # ── Testing ─────────────────────────────────────────
 testing:
@@ -31,23 +29,43 @@ testing:
   framework: ""
   # Examples: jest, pytest, vitest, xunit, go test
 
-  # Command the QA agent runs to execute the full test suite.
-  command: ""
-  # Examples: npm test, pytest tests/, dotnet test, go test ./...
-
   # Directories containing test files (relative to repo root).
   directories:
     - tests/
 
 # ── Linting & Formatting ────────────────────────────
 linting:
-  # Linter commands (one per language or tool).
-  commands: []
-  # Examples: [eslint src/, ruff check .]
-
   # Formatter commands (one per language or tool).
   formatters: []
   # Examples: [prettier --write src/, black .]
+
+# ── Validation ─────────────────────────────────────
+# Required tasks must pass. Optional tasks are run when listed; omit lint or
+# type_check when the selected stack has no applicable tool.
+validation:
+  required_tasks: [build, test]
+  optional_tasks: [lint, type_check]
+  install_task: install
+  evidence_directory: .sdlc/evidence
+
+# Structured argv only. The runner invokes executable with args directly; it
+# never evaluates a shell command string.
+tasks:
+  install:
+    executable: npm
+    args: [ci]
+  build:
+    executable: npm
+    args: [run, build]
+  test:
+    executable: npm
+    args: [test]
+  lint:
+    executable: npm
+    args: [run, lint]
+  type_check:
+    executable: npm
+    args: [run, typecheck]
 
 # ── Conventions ─────────────────────────────────────
 conventions:

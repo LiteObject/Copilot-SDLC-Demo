@@ -2,9 +2,12 @@
 description: "Blast-radius checker for implementation work. Declare allowed files before coding, then verify no cross-domain contamination after. Use during REVIEW or before committing."
 applyTo: "src/**"
 ---
-# Scope Audit — Declare → Implement → Verify
+# Scope Audit - Declare -> Implement -> Verify
 
-Enforce the rule: **implement the plan, don't touch files outside it.**
+Enforce the rule: **implement the plan; do not touch files outside it.** The
+machine-readable `planned_files` list in the YAML front matter of
+`docs/spec.md` is authoritative. The visible File Structure section is useful
+for people but is not the scope input to the audit script.
 
 ## When to Use
 
@@ -16,7 +19,20 @@ Enforce the rule: **implement the plan, don't touch files outside it.**
 
 ### Step 1 — Declare Scope (Developer, before coding)
 
-Before writing any code, the Developer reads the **Implementation Plan** in `docs/spec.md` and records the exact list of planned files. These become the **allowed file set**. Any file NOT in this set is off-limits unless the Architect updates the plan.
+Before writing any code, the Developer reads the **Implementation Plan** in
+`docs/spec.md` and records exact repository-relative paths under
+`planned_files`. Directory entries such as `src/` are invalid. Any file NOT in
+this set is off-limits unless the Architect updates the plan.
+
+Glob patterns are exceptional. A matching `approved_globs` entry must contain
+five pipe-separated fields:
+
+```text
+pattern|justification|approver|revision_commit_sha|timestamp
+```
+
+The pattern must match a `planned_files` entry, every field must be non-empty,
+and the revision must match `revision_commit_sha` when that field is present.
 
 ### Step 2 — Implement (Developer)
 
@@ -43,10 +59,12 @@ The Reviewer runs the scope-audit script, which compares the actual git diff aga
 ./scripts/scope-audit.sh staged
 ```
 
-The script produces a machine-readable report with three categories:
+The script produces a machine-readable report with these categories:
 - `[IN_SCOPE]` — changed files that appear in the plan → OK.
 - `[SCOPE_CREEP]` — changed files NOT in the plan → flag in review findings.
 - `[MISSING]` — planned files NOT created → flag in review findings.
+- `[WORKFLOW]` — `docs/spec.md` state/evidence and `.sdlc/` generated evidence changes excluded from product scope.
+- `[PLAN_INVALID]` — directory entries, malformed paths, or unapproved globs.
 
 It also emits a JSON summary for programmatic consumers. The Reviewer must run this script (not manually reason about `git diff` output) and report its results verbatim.
 
@@ -55,18 +73,23 @@ It also emits a JSON summary for programmatic consumers. The Reviewer must run t
 | Finding | Action |
 |---------|--------|
 | All changes within planned files | Scope check passes |
-| Extra files touched | Reviewer flags `[SCOPE CREEP]` → routes to Developer to revert or Architect to update plan |
-| Planned file not implemented | Reviewer flags `[MISSING]` → routes to Developer to implement |
+| Extra files touched | Reviewer flags `[SCOPE CREEP]` -> routes to Developer to revert or Architect to update the plan |
+| Planned file not implemented | Reviewer flags `[MISSING]` -> routes to Developer to implement |
+| Directory entry or unapproved glob | Reviewer flags `[PLAN_INVALID]` -> Architect records exact paths or approved evidence |
 
 ### What Counts as "In Scope"
 
-- Files explicitly listed in the Implementation Plan's file structure.
-- Test files under `tests/` that correspond to planned source files (tests are always in scope for the QA phase).
+- Files explicitly listed in front matter `planned_files`.
+- Approved glob matches with a complete `approved_globs` record.
 - Configuration files that the plan says must change (e.g., `package.json` for new dependencies).
 
 ### What is Out of Scope (flag it)
 
-- Refactoring of unrelated files ("while I was in there…").
+- Refactoring of unrelated files ("while I was in there...").
 - Whitespace or formatting changes to files not in the plan.
 - New utility/helper files not documented in the plan.
 - Changes to CI/CD, Docker, or infrastructure files not in the plan.
+
+`docs/spec.md` and `.sdlc/` are workflow-managed and reported separately. They must still be
+reviewed for unauthorized requirement, plan, or evidence changes; excluding it
+from product scope does not make those edits automatically valid.

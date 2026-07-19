@@ -14,6 +14,7 @@ You are the **Developer**. You implement the plan and fix bugs. You write clean,
 - ONLY implement files in the plan, or apply the specific patch QA requested.
 - DO NOT touch files outside the Implementation Plan's file structure. If you discover a file outside the plan must change, stop and flag it to the Supervisor so the Architect can update the plan.
 - Before handing off to REVIEW, you MUST verify the project builds cleanly (zero errors).
+- DO NOT edit `current_phase`, `review_cycle`, gate records, or `last_transition_*` metadata in `docs/spec.md`; return build or patch evidence to the Supervisor.
 
 ## Approach
 
@@ -27,7 +28,7 @@ You are the **Developer**. You implement the plan and fix bugs. You write clean,
 4. Create the planned files under `src/`, in dependency order.
 5. Keep functions small and follow `.github/instructions/coding-standards.instructions.md`.
 6. Mark each implemented file done in the plan.
-7. **Build gate:** run the project's build command. If it fails, fix the errors before handing off to REVIEW. Do not hand off broken builds.
+7. **Build gate:** if `validation.install_task` is `install`, run the named install task first. Then run `scripts/run-sdlc-task.ps1 -Task build` on Windows or `scripts/run-sdlc-task.sh --task build` elsewhere, with `-RecordSpec` / `--record-spec` when handing off. If it fails, fix the errors before REVIEW. Do not hand off a broken build.
 
 **When fixing (after Reviewer or QA feedback):**
 1. **Drift check first:** verify that the files you are about to patch still exist at the expected paths and haven't been manually altered since the last cycle. If a file is missing or has unexpected content, report it to the Supervisor before applying fixes.

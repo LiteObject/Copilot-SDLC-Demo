@@ -4,16 +4,17 @@ These rules apply to every agent in this workspace (Supervisor, PM, Architect, D
 
 ## Configuration
 
-- Stack-specific settings (languages, frameworks, test command, linting) live in [.github/sdlc-config.yml](sdlc-config.yml). Every agent reads this file to discover project conventions. When adapting this repo to a new stack, edit `sdlc-config.yml` first — it is the single place to set language, framework, and tool defaults.
+- Stack-specific settings and the versioned named-task registry live in [.github/sdlc-config.yml](sdlc-config.yml). Every agent reads this file to discover project conventions. When adapting this repo to a new stack, edit `sdlc-config.yml` first, then run `scripts/validate-sdlc-config.ps1` or `.sh` before implementation.
 
 ## Workflow
 
-- The project moves through a state machine: `GATHERING_REQS → [DESIGN] → PLANNING → CODING → REVIEW → TESTING → [DEPLOYMENT_READINESS] → DONE`. The `DESIGN` phase is optional (frontend/UI projects only). `DEPLOYMENT_READINESS` is an optional pre-merge gate.
-- [docs/spec.md](../docs/spec.md) is the single source of truth for requirements, plan, and current state. Keep it updated as work progresses.
+- The project moves through the state machine recorded in the YAML front matter of [docs/spec.md](../docs/spec.md): `GATHERING_REQS → [DESIGN] → PLANNING → CODING → REVIEW → TESTING → [DEPLOYMENT_READINESS] → DONE`, with explicit review and failure loops. The visible state fields must match the metadata.
+- Workers return gate results and evidence; only the Supervisor changes `current_phase`, `review_cycle`, gate records, and `last_transition_*`. Run `scripts/check-phase.ps1` or `scripts/check-phase.sh` with the target phase before every transition.
 - Do not skip ahead: code is only written after requirements are clear and a plan exists.
 - **Before advancing state**, the Supervisor runs `scripts/check-phase.ps1` (or `.sh`) to validate that prerequisite sections in `docs/spec.md` are populated. Do not advance if the script fails.
 - The **Developer must verify the project builds cleanly** before handing off to REVIEW.
 - The **Reviewer performs a scope audit** — run `scripts/scope-audit.ps1` (or `.sh`) and report the output. The script compares the actual git diff against the Implementation Plan in `docs/spec.md` and categorizes every changed file as `[IN_SCOPE]`, `[SCOPE_CREEP]`, or `[MISSING]`.
+- **Validation uses named tasks** — run `scripts/run-sdlc-task.ps1 -Task build` on Windows or `scripts/run-sdlc-task.sh --task build` elsewhere; use `all` to install dependencies and run required plus configured optional tasks. Task commands are structured executable/args records, never shell strings.
 
 ## Code Style
 
@@ -51,9 +52,12 @@ Phase-specific standards are in `.github/instructions/`:
 
 Utility scripts in `scripts/` reduce LLM hallucination risk for deterministic checks:
 - `check-phase.ps1` / `check-phase.sh` — validates `docs/spec.md` is well-formed and prerequisite sections are populated before advancing state.
+- `migrate-spec.ps1` / `migrate-spec.sh` — explicitly migrates a legacy `docs/spec.md`, creates a backup, and initializes workflow metadata; it never writes without `-Force` / `--force`.
+- `validate-sdlc-config.ps1` / `validate-sdlc-config.sh` — validates schema, package manager/manifest, test directories, named tasks, command availability, and evidence settings; writes config evidence.
+- `run-sdlc-task.ps1` / `run-sdlc-task.sh` — runs structured install/build/test/lint/type-check tasks, retains logs and JSON evidence, and can update `docs/spec.md` gate records.
 - `scope-audit.ps1` / `scope-audit.sh` — compares git diff against the Implementation Plan and reports scope creep.
 - The scaffold tools remain in the template authoring repository under `tools/`; they are not copied into the target project.
 
 ## CI Integration
 
-When the `github-actions` extension is selected, `.github/workflows/sdlc-autonomy.yml` validates the configured test command when the `copilot:fix` label is added to an issue. It does not itself invoke the Copilot coding agent or create a pull request; configure that assignment separately. Enable test validation in `.github/sdlc-config.yml` by setting `integrations.copilot_coding_agent` to `true`.
+When the `github-actions` extension is selected, `.github/workflows/sdlc-autonomy.yml` validates the named task registry, installs dependencies, runs configured tasks, uploads evidence, and comments on issues labeled `copilot:fix`. It does not itself invoke the Copilot coding agent or create a pull request; configure that assignment separately. Enable the workflow in `.github/sdlc-config.yml` by setting `integrations.copilot_coding_agent` to `true`.

@@ -89,7 +89,7 @@ Copilot-SDLC-Demo/
 │  ├─ base/                         <- installed into every target repository
 │  │  ├─ .github/                   <- agents, base instructions, prompts, config
 │  │  ├─ docs/spec.md               <- installed project state template
-│  │  └─ scripts/                   <- phase and scope validation scripts
+│  │  └─ scripts/                   <- phase, config, task, migration, and scope validation scripts
 │  └─ extensions/                   <- opt-in target capabilities
 │     ├─ deployment-readiness/
 │     ├─ frontend/
@@ -100,6 +100,8 @@ Copilot-SDLC-Demo/
 ├─ docs/
 │  ├─ architecture/agent-design.md <- authoring and orchestration design
 │  └─ roadmap.md                    <- future implementation roadmap
+├─ tests/phase0/                    <- authoring-repository workflow fixtures and harnesses
+├─ tests/phase1/                    <- config and named-task validation harnesses
 ├─ .github/copilot-instructions.md  <- authoring-repository rules
 ├─ README.md                        <- this file
 └─ LICENSE
@@ -149,6 +151,9 @@ folder:
 # Windows / PowerShell
 ./tools/scaffold-sdlc.ps1 -Target ../my-project
 
+# Fail adoption until the project's named validation tasks are configured
+./tools/scaffold-sdlc.ps1 -Target ../my-project -ValidateConfig
+
 # Add frontend UX and accessibility guidance
 ./tools/scaffold-sdlc.ps1 -Target ../my-project -Extension frontend
 ```
@@ -156,6 +161,9 @@ folder:
 ```bash
 # macOS / Linux / WSL
 ./tools/scaffold-sdlc.sh ../my-project
+
+# Fail adoption until the project's named validation tasks are configured
+./tools/scaffold-sdlc.sh ../my-project --validate-config
 
 # Add frontend UX and accessibility guidance
 ./tools/scaffold-sdlc.sh ../my-project --extension frontend
@@ -203,9 +211,10 @@ script remains the source of truth for which files are copied.
 
 Start with the **configuration file** — it is the single place to set stack defaults:
 
-- **Stack, test command, linting:** edit `.github/sdlc-config.yml` in the consuming repo. The source default is [template/base/.github/sdlc-config.yml](template/base/.github/sdlc-config.yml).
-  Every agent reads this file. Set `languages`, `frameworks`, `testing.command`,
-  `linting.commands`, and `conventions` to match your project.
+- **Stack and validation tasks:** edit `.github/sdlc-config.yml` in the consuming repo. The source default is [template/base/.github/sdlc-config.yml](template/base/.github/sdlc-config.yml).
+  Every agent reads this file. Set `sdlc_config_schema: 1`, the package manager
+  and manifest, `testing.framework`/`directories`, and the structured
+  `validation`/`tasks` registry. Do not add a shell command string.
 - **Models & tools:** edit the YAML frontmatter at the top of each
   `.github/agents/*.agent.md` file.
 - **Coding conventions:** edit the installed
@@ -220,6 +229,7 @@ Start with the **configuration file** — it is the single place to set stack de
   `.github/sdlc-config.yml` and the installed
   `.github/instructions/testing-standards.instructions.md`. The source default
   is [template/base/.github/instructions/testing-standards.instructions.md](template/base/.github/instructions/testing-standards.instructions.md).
+- **Validation compatibility:** see [docs/guides/validation-compatibility.md](docs/guides/validation-compatibility.md) for supported package managers, operating systems, and optional lint/type-check fallback behavior. Run `scripts/validate-sdlc-config.ps1` or `.sh`, then `scripts/run-sdlc-task.ps1 -Task all` or `scripts/run-sdlc-task.sh --task all`.
 - **Default tech stack:** note your preferences in the installed
   `.github/copilot-instructions.md` and `.github/sdlc-config.yml` in the
   consuming repo so every agent obeys them. The source default is
@@ -229,8 +239,53 @@ Start with the **configuration file** — it is the single place to set stack de
 
 The installed `docs/spec.md` is the tracked source of truth. The template source
 is [template/base/docs/spec.md](template/base/docs/spec.md). For a fresh feature,
-reset its **Current State** to `GATHERING_REQS` and clear the Goal, Requirements,
-Design, Plan, and Test Results sections — the supervisor refills them as it works.
+reset `current_phase` and the visible **Current State** to `GATHERING_REQS`, set
+`review_cycle` to `0`, clear gate records to `NOT_RUN`, and clear the Goal,
+Requirements, Design, Plan, and Test Results sections. Only the Supervisor may
+apply later transitions after running `scripts/check-phase`.
+
+### Workflow integrity checks
+
+The YAML front matter in `docs/spec.md` records the schema version, enabled
+optional gates, revision-bound gate evidence, review-cycle count, exact
+`planned_files`, and any approved glob records. The visible Markdown state is
+checked against that metadata. Worker agents return results; the Supervisor is
+the only agent that changes phase or gate metadata.
+
+Run the authoring-repository regression harnesses with:
+
+```powershell
+./tests/phase0/run-tests.ps1
+```
+
+```bash
+./tests/phase0/run-tests.sh
+```
+
+The harnesses exercise both validator variants against the same workflow cases,
+including failed gates, stale evidence, CRLF input, review-cycle exhaustion,
+exact scope, invalid directory scope, and approved globs.
+
+### Migrate an existing project
+
+The installer preserves an existing project-owned `docs/spec.md`; it does not
+silently rewrite legacy state. In the consuming repository, preview the
+migration first, then rerun it with explicit confirmation:
+
+```powershell
+./scripts/migrate-spec.ps1
+./scripts/migrate-spec.ps1 -Force
+```
+
+```bash
+./scripts/migrate-spec.sh
+./scripts/migrate-spec.sh --force
+```
+
+Migration preserves the current phase, review cycle, meaningful Design section,
+and exact file entries, initializes gate records to `NOT_RUN`, and writes a
+backup under `.sdlc/migrations/`. The Supervisor must populate fresh gate
+evidence before advancing the migrated workflow.
 
 ### Optional: issue-triggered test validation via GitHub
 

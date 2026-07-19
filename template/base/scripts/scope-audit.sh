@@ -1,208 +1,384 @@
 #!/usr/bin/env bash
 #
-# scope-audit.sh — Compare the actual git diff against the Implementation Plan
-# in docs/spec.md to detect scope creep, missing files, and drift.
+# Compare changed files with the explicit planned_files scope in docs/spec.md.
 #
-# Reads the File Structure from the Implementation Plan section of
-# docs/spec.md, then compares it against the current git diff (staged +
-# unstaged + untracked). Produces a structured report categorizing every
-# changed file as IN_SCOPE, SCOPE_CREEP, or plan items NOT_FOUND.
-#
-# Designed to be called by the Reviewer agent during REVIEW, but also usable
-# as a pre-commit hook or CI step.
+# Exact paths are the default. Glob patterns are accepted only when a matching
+# approved_globs record contains pattern, justification, approver, revision,
+# and timestamp fields separated by '|'. Directory entries such as src/ are
+# rejected.
 #
 # Exit codes:
-#   0 — All changes within planned scope.
-#   1 — Scope creep or missing files detected.
-#   2 — Could not parse the spec file.
-#
-# Usage:
-#   ./scripts/scope-audit.sh               # check uncommitted changes
-#   ./scripts/scope-audit.sh origin/main   # check branch against main
-#   ./scripts/scope-audit.sh staged        # check staged changes only
+#   0 - scope is clean
+#   1 - scope creep or missing files detected
+#   2 - the scope plan could not be parsed or is invalid
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SPEC_PATH="${REPO_ROOT}/docs/spec.md"
-BASE_REF="${1:-HEAD}"
+SPEC_PATH=""
+BASE_REF='HEAD'
 
-if [ ! -f "$SPEC_PATH" ]; then
+usage() {
+    cat <<'EOF'
+Usage: ./scripts/scope-audit.sh [BASE_REF] [--spec-path PATH] [--repo-root PATH]
+EOF
+}
+
+while (($# > 0)); do
+    case "$1" in
+        --spec-path)
+            [[ $# -ge 2 ]] || { echo '[ERROR] --spec-path requires a value.'; exit 2; }
+            SPEC_PATH="$2"
+            shift 2
+            ;;
+        --repo-root)
+            [[ $# -ge 2 ]] || { echo '[ERROR] --repo-root requires a value.'; exit 2; }
+            REPO_ROOT="$2"
+            shift 2
+            ;;
+        --base-ref)
+            [[ $# -ge 2 ]] || { echo '[ERROR] --base-ref requires a value.'; exit 2; }
+            BASE_REF="$2"
+            shift 2
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        -*)
+            echo "[ERROR] Unknown option: $1"
+            usage >&2
+            exit 2
+            ;;
+        *)
+            if [[ "$BASE_REF" != 'HEAD' ]]; then
+                echo "[ERROR] Unexpected argument: $1"
+                exit 2
+            fi
+            BASE_REF="$1"
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$SPEC_PATH" ]]; then
+    SPEC_PATH="$REPO_ROOT/docs/spec.md"
+fi
+if [[ ! -f "$SPEC_PATH" ]]; then
     echo "[ERROR] docs/spec.md not found at: $SPEC_PATH"
     exit 2
 fi
 
-CONTENT=$(cat "$SPEC_PATH")
-
-# ── Extract the planned file list ─────────────────
-# Look for the File Structure code block.
-FILE_BLOCK=$(echo "$CONTENT" | awk '/^## File Structure/{found=1; next} found && /^```/{if(++cnt==1){next} else{exit}} found && cnt==1')
-
-if [ -z "$FILE_BLOCK" ]; then
-    echo "[ERROR] Could not find '## File Structure' section with a code block in docs/spec.md"
+CONTENT="$(tr -d '\r' < "$SPEC_PATH")"
+if ! FRONT_MATTER="$(printf '%s\n' "$CONTENT" | awk '
+    NR == 1 && $0 == "---" { inside = 1; next }
+    inside && $0 == "---" { found = 1; exit }
+    inside { print }
+    END { if (!found) exit 2 }
+')"; then
+    echo "[ERROR] docs/spec.md must start with YAML front matter delimited by '---'."
     exit 2
 fi
 
-# Parse planned files: strip comments, blank lines, and trim.
-PLANNED_FILES=()
-while IFS= read -r line; do
-    line=$(echo "$line" | xargs)
-    if [ -n "$line" ] && [[ ! "$line" =~ ^# ]] && [[ ! "$line" =~ ^// ]]; then
-        PLANNED_FILES+=("$line")
+declare -A META=()
+declare -a PLANNED_FILES=()
+declare -a APPROVED_GLOBS=()
+ACTIVE_LIST=""
+
+trim_value() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "$value"
+}
+
+unquote_value() {
+    local value
+    value="$(trim_value "$1")"
+    if [[ ${#value} -ge 2 && "${value:0:1}" == '"' && "${value: -1}" == '"' ]]; then
+        value="${value:1:${#value}-2}"
+        value="${value//\\\"/\"}"
+    elif [[ ${#value} -ge 2 && "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
+        value="${value:1:${#value}-2}"
     fi
-done <<< "$FILE_BLOCK"
+    printf '%s' "$value"
+}
 
-echo "=== Scope Audit ==="
-echo "Planned files: ${#PLANNED_FILES[@]}"
+while IFS= read -r line; do
+    [[ -z "$(trim_value "$line")" ]] && continue
+    [[ "$(trim_value "$line")" == \#* ]] && continue
+    if [[ "$line" =~ ^([A-Za-z0-9_]+):[[:space:]]*(.*)$ ]]; then
+        key="${BASH_REMATCH[1]}"
+        value="$(unquote_value "${BASH_REMATCH[2]}")"
+        META["$key"]="$value"
+        ACTIVE_LIST=""
+        if [[ "$key" == 'planned_files' || "$key" == 'approved_globs' ]]; then
+            if [[ "$value" == '[]' ]]; then
+                :
+            elif [[ -z "$value" ]]; then
+                ACTIVE_LIST="$key"
+            else
+                echo "[ERROR] Metadata list '$key' must use [] or an indented YAML list."
+                exit 2
+            fi
+        fi
+    elif [[ -n "$ACTIVE_LIST" && "$line" =~ ^[[:space:]]*-[[:space:]]*(.*)$ ]]; then
+        item="$(unquote_value "${BASH_REMATCH[1]}")"
+        if [[ "$ACTIVE_LIST" == 'planned_files' ]]; then
+            PLANNED_FILES+=("$item")
+        else
+            APPROVED_GLOBS+=("$item")
+        fi
+    else
+        echo "[ERROR] Unsupported YAML front matter line: $line"
+        exit 2
+    fi
+done <<< "$FRONT_MATTER"
+
+meta_get() {
+    printf '%s' "${META[$1]-}"
+}
+
+for key in sdlc_schema planned_files approved_globs; do
+    if [[ -z "${META[$key]+present}" ]]; then
+        echo "[ERROR] Required workflow metadata '$key' is missing."
+        exit 2
+    fi
+done
+if [[ "$(meta_get sdlc_schema)" != '1' ]]; then
+    echo "[ERROR] Unsupported sdlc_schema '$(meta_get sdlc_schema)'. Expected '1'."
+    exit 2
+fi
+
+normalize_path() {
+    local value="$1"
+    value="${value//\\//}"
+    while [[ "$value" == ./* ]]; do
+        value="${value#./}"
+    done
+    printf '%s' "$value"
+}
+
+is_glob() {
+    [[ "$1" == *'*'* || "$1" == *'?'* || "$1" == *'['* ]]
+}
+
+has_valid_glob_approval() {
+    local pattern="$1"
+    local revision="$(meta_get revision_commit_sha)"
+    local record approval_pattern justification approver approval_revision timestamp
+    for record in "${APPROVED_GLOBS[@]}"; do
+        IFS='|' read -r approval_pattern justification approver approval_revision timestamp <<< "$record"
+        approval_pattern="$(normalize_path "$approval_pattern")"
+        justification="$(trim_value "${justification-}")"
+        approver="$(trim_value "${approver-}")"
+        approval_revision="$(trim_value "${approval_revision-}")"
+        timestamp="$(trim_value "${timestamp-}")"
+        if [[ "$approval_pattern" == "$pattern" && -n "$justification" && -n "$approver" &&
+              -n "$approval_revision" && -n "$timestamp" &&
+              ( -z "$revision" || "$approval_revision" == "$revision" ) ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+glob_to_regex() {
+    local pattern="$1"
+    local regex='' char next index=0
+    while (( index < ${#pattern} )); do
+        char="${pattern:index:1}"
+        if [[ "$char" == '*' && "${pattern:index+1:1}" == '*' ]]; then
+            regex+='.*'
+            ((index += 2))
+            continue
+        fi
+        case "$char" in
+            '*') regex+='[^/]*' ;;
+            '?') regex+='[^/]' ;;
+            '.'|'+'|'^'|'$'|'('|')'|'|'|'{'|'}'|'['|']'|'\\') regex+="\\$char" ;;
+            *) regex+="$char" ;;
+        esac
+        ((index += 1))
+    done
+    printf '^%s$' "$regex"
+}
+
+declare -a PLAN_PATTERNS=()
+declare -a PLAN_IS_GLOB=()
+declare -a PLAN_APPROVED=()
+declare -a INVALID_PLAN=()
+declare -a UNAPPROVED_GLOBS=()
+
+for raw_path in "${PLANNED_FILES[@]}"; do
+    path="$(normalize_path "$raw_path")"
+    [[ -n "$path" ]] || continue
+    if [[ "$path" == /* || "$path" =~ ^[A-Za-z]:/ || "$path" =~ (^|/)\.\.(/|$) ]]; then
+        INVALID_PLAN+=("$path (path must be relative)")
+        continue
+    fi
+    if [[ "$path" == */ ]]; then
+        INVALID_PLAN+=("$path (directory entries are not allowed; list exact files)")
+        continue
+    fi
+    PLAN_PATTERNS+=("$path")
+    if is_glob "$path"; then
+        PLAN_IS_GLOB+=(1)
+        if has_valid_glob_approval "$path"; then
+            PLAN_APPROVED+=(1)
+        else
+            PLAN_APPROVED+=(0)
+            UNAPPROVED_GLOBS+=("$path")
+        fi
+    else
+        PLAN_IS_GLOB+=(0)
+        PLAN_APPROVED+=(1)
+    fi
+done
+
+echo '=== Scope Audit ==='
+echo "Planned files: ${#PLAN_PATTERNS[@]}"
 echo "Base ref: $BASE_REF"
-echo ""
+echo
+if (( ${#INVALID_PLAN[@]} > 0 )); then
+    echo "[PLAN_INVALID] (${#INVALID_PLAN[@]})"
+    printf '  !!  %s\n' "${INVALID_PLAN[@]}"
+    echo
+fi
+if (( ${#UNAPPROVED_GLOBS[@]} > 0 )); then
+    echo "[PLAN_INVALID] (${#UNAPPROVED_GLOBS[@]}) unapproved glob patterns"
+    for pattern in "${UNAPPROVED_GLOBS[@]}"; do
+        echo "  !!  $pattern requires an approved_globs record"
+    done
+    echo
+fi
 
-# ── Get the actual changed files ──────────────────
-CHANGED_FILES=()
-
-pushd "$REPO_ROOT" > /dev/null
-
-if [ "$BASE_REF" = "staged" ]; then
-    while IFS= read -r f; do
-        [ -n "$f" ] && CHANGED_FILES+=("$f")
-    done < <(git diff --cached --name-only 2>/dev/null || true)
-elif [ "$BASE_REF" = "HEAD" ]; then
-    # Uncommitted: staged + unstaged + untracked.
-    while IFS= read -r f; do
-        [ -n "$f" ] && CHANGED_FILES+=("$f")
-    done < <( { git diff --cached --name-only 2>/dev/null; git diff --name-only 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null; } | sort -u || true)
+declare -a CHANGED_FILES=()
+pushd "$REPO_ROOT" >/dev/null
+if [[ "$BASE_REF" == 'staged' ]]; then
+    mapfile -t CHANGED_FILES < <(git diff --cached --name-only 2>/dev/null | tr -d '\r' | sort -u || true)
+elif [[ "$BASE_REF" == 'HEAD' ]]; then
+    mapfile -t CHANGED_FILES < <({ git diff --cached --name-only 2>/dev/null; git diff --name-only 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null; } | tr -d '\r' | sort -u || true)
 else
-    while IFS= read -r f; do
-        [ -n "$f" ] && CHANGED_FILES+=("$f")
-    done < <(git diff --name-only "$BASE_REF" 2>/dev/null || true)
+    mapfile -t CHANGED_FILES < <(git diff --name-only "$BASE_REF" 2>/dev/null | tr -d '\r' | sort -u || true)
+fi
+popd >/dev/null
+
+if (( ${#CHANGED_FILES[@]} == 0 )); then
+    echo '[INFO] No changed files detected.'
+else
+    echo "Changed files (${#CHANGED_FILES[@]}):"
+    printf '  %s\n' "${CHANGED_FILES[@]}"
+    echo
 fi
 
-popd > /dev/null
-
-if [ ${#CHANGED_FILES[@]} -eq 0 ]; then
-    echo "[INFO] No changed files detected. Scope is clean."
-    exit 0
-fi
-
-echo "Changed files (${#CHANGED_FILES[@]}):"
-for f in "${CHANGED_FILES[@]}"; do echo "  $f"; done
-echo ""
-
-# ── Classify each changed file ────────────────────
-IN_SCOPE=()
-SCOPE_CREEP=()
+declare -a WORKFLOW_CHANGES=()
+declare -a IN_SCOPE=()
+declare -a SCOPE_CREEP=()
 
 for file in "${CHANGED_FILES[@]}"; do
+    file="$(normalize_path "$file")"
+    if [[ "$file" == 'docs/spec.md' || "$file" == '.sdlc' || "$file" == .sdlc/* ]]; then
+        WORKFLOW_CHANGES+=("$file")
+        continue
+    fi
     matched=0
-    for plan_file in "${PLANNED_FILES[@]}"; do
-        if [ "$file" = "$plan_file" ]; then
-            matched=1
-            break
-        fi
-        # Match ** wildcard patterns.
-        if [[ "$plan_file" == *"**"* ]]; then
-            pattern="${plan_file//\*\*/.*}"
-            if [[ "$file" =~ ^${pattern}$ ]]; then
+    for ((index = 0; index < ${#PLAN_PATTERNS[@]}; index++)); do
+        pattern="${PLAN_PATTERNS[$index]}"
+        if (( ${PLAN_IS_GLOB[$index]} == 1 )); then
+            if (( ${PLAN_APPROVED[$index]} == 1 )) && [[ "$file" =~ $(glob_to_regex "$pattern") ]]; then
                 matched=1
                 break
             fi
-        fi
-        # Match directory prefixes.
-        if [[ "$plan_file" == */ ]] && [[ "$file" == "$plan_file"* ]]; then
+        elif [[ "$file" == "$pattern" ]]; then
             matched=1
             break
         fi
     done
-    if [ "$matched" -eq 1 ]; then
+    if (( matched == 1 )); then
         IN_SCOPE+=("$file")
     else
         SCOPE_CREEP+=("$file")
     fi
 done
 
-# ── Detect planned files NOT created ───────────────
-MISSING=()
-for plan_file in "${PLANNED_FILES[@]}"; do
-    # Skip directory-wide patterns and globs.
-    if [[ "$plan_file" == */ ]] || [[ "$plan_file" == *"**"* ]]; then
-        continue
-    fi
-    if [ ! -f "$REPO_ROOT/$plan_file" ]; then
-        MISSING+=("$plan_file")
+declare -a MISSING=()
+for ((index = 0; index < ${#PLAN_PATTERNS[@]}; index++)); do
+    (( ${PLAN_IS_GLOB[$index]} == 1 )) && continue
+    if [[ ! -f "$REPO_ROOT/${PLAN_PATTERNS[$index]}" ]]; then
+        MISSING+=("${PLAN_PATTERNS[$index]}")
     fi
 done
 
-# ── Report ────────────────────────────────────────
-echo "=== Results ==="
-echo ""
-
-HAS_ISSUES=0
-
-if [ ${#IN_SCOPE[@]} -gt 0 ]; then
+echo '=== Results ==='
+echo
+if (( ${#WORKFLOW_CHANGES[@]} > 0 )); then
+    echo "[WORKFLOW] (${#WORKFLOW_CHANGES[@]} files excluded from product scope)"
+    printf '  OK  %s\n' "${WORKFLOW_CHANGES[@]}"
+    echo
+fi
+if (( ${#IN_SCOPE[@]} > 0 )); then
     echo "[IN_SCOPE] (${#IN_SCOPE[@]} files)"
-    for f in "${IN_SCOPE[@]}"; do echo "  OK  $f"; done
-    echo ""
+    printf '  OK  %s\n' "${IN_SCOPE[@]}"
+    echo
+fi
+if (( ${#SCOPE_CREEP[@]} > 0 )); then
+    echo "[SCOPE_CREEP] (${#SCOPE_CREEP[@]} files) - changed files not in planned_files:"
+    printf '  !!  %s\n' "${SCOPE_CREEP[@]}"
+    echo
+fi
+if (( ${#MISSING[@]} > 0 )); then
+    echo "[MISSING] (${#MISSING[@]} files) - exact planned files not present:"
+    printf '  ??  %s\n' "${MISSING[@]}"
+    echo
+fi
+if (( ${#INVALID_PLAN[@]} == 0 && ${#UNAPPROVED_GLOBS[@]} == 0 && ${#SCOPE_CREEP[@]} == 0 && ${#MISSING[@]} == 0 )); then
+    echo '[PASS] All changes are within the approved planned scope.'
 fi
 
-if [ ${#SCOPE_CREEP[@]} -gt 0 ]; then
-    HAS_ISSUES=1
-    echo "[SCOPE_CREEP] (${#SCOPE_CREEP[@]} files) — touched files NOT in the plan:"
-    for f in "${SCOPE_CREEP[@]}"; do echo "  !!  $f"; done
-    echo ""
-fi
-
-if [ ${#MISSING[@]} -gt 0 ]; then
-    HAS_ISSUES=1
-    echo "[MISSING] (${#MISSING[@]} files) — planned files NOT created:"
-    for f in "${MISSING[@]}"; do echo "  ??  $f"; done
-    echo ""
-fi
-
-if [ "$HAS_ISSUES" -eq 0 ]; then
-    echo "[PASS] All changes are within planned scope. No scope creep detected."
-    echo ""
-fi
-
-# ── Summary JSON (for programmatic consumers) ─────
 json_escape() {
     local value="$1"
-    value=${value//\\/\\\\}
-    value=${value//\"/\\\"}
-    value=${value//$'\r'/\\r}
-    value=${value//$'\n'/\\n}
-    value=${value//$'\t'/\\t}
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\n'/\\n}"
     printf '"%s"' "$value"
 }
-
 json_array() {
-    local first=1
-    local value
+    local first=1 value
     printf '['
     for value in "$@"; do
-        if [ "$first" -eq 0 ]; then
-            printf ','
-        fi
+        (( first == 0 )) && printf ','
         json_escape "$value"
         first=0
     done
     printf ']'
 }
 
-echo "--- JSON Summary ---"
-printf '{"planned":%d,"changed":%d,"in_scope":' "${#PLANNED_FILES[@]}" "${#CHANGED_FILES[@]}"
-json_array "${IN_SCOPE[@]}"
-printf ',"scope_creep":'
-json_array "${SCOPE_CREEP[@]}"
-printf ',"missing":'
-json_array "${MISSING[@]}"
-if [ "$HAS_ISSUES" -eq 0 ]; then
-    printf ',"clean":true}\n'
-else
-    printf ',"clean":false}\n'
+clean=true
+if (( ${#INVALID_PLAN[@]} > 0 || ${#UNAPPROVED_GLOBS[@]} > 0 || ${#SCOPE_CREEP[@]} > 0 || ${#MISSING[@]} > 0 )); then
+    clean=false
 fi
+echo '--- JSON Summary ---'
+printf '{"planned":%d,"changed":%d,"workflow":' "${#PLAN_PATTERNS[@]}" "${#CHANGED_FILES[@]}"
+json_array "${WORKFLOW_CHANGES[@]}"
+printf '%s' ',"in_scope":'
+json_array "${IN_SCOPE[@]}"
+printf '%s' ',"scope_creep":'
+json_array "${SCOPE_CREEP[@]}"
+printf '%s' ',"missing":'
+json_array "${MISSING[@]}"
+printf '%s' ',"invalid_plan":'
+json_array "${INVALID_PLAN[@]}"
+printf '%s' ',"unapproved_globs":'
+json_array "${UNAPPROVED_GLOBS[@]}"
+printf ',"clean":%s}\n' "$clean"
 
-if [ "$HAS_ISSUES" -eq 1 ]; then
+if (( ${#INVALID_PLAN[@]} > 0 || ${#UNAPPROVED_GLOBS[@]} > 0 )); then
+    exit 2
+fi
+if (( ${#SCOPE_CREEP[@]} > 0 || ${#MISSING[@]} > 0 )); then
     exit 1
 fi
 exit 0

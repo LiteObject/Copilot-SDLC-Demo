@@ -1,0 +1,40 @@
+name: Phase 0 Workflow Integrity
+
+on:
+    push:
+    pull_request:
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    bash:
+        name: Bash validators and migration
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Run Phase 0 validator and scope tests
+              shell: bash
+              run: bash tests/phase0/run-tests.sh
+
+            - name: Run legacy migration tests
+              shell: bash
+              run: bash tests/phase0/run-migration-tests.sh
+
+    powershell:
+        name: PowerShell validators and migration
+        runs-on: windows-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Run Phase 0 validator and scope tests
+              shell: pwsh
+              run: ./tests/phase0/run-tests.ps1
+
+            - name: Run legacy migration tests
+              shell: pwsh
+              run: ./tests/phase0/run-migration-tests.ps1

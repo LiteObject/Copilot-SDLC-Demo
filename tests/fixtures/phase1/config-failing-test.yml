@@ -1,0 +1,24 @@
+sdlc_config_schema: 1
+stack:
+  languages: [javascript]
+  frameworks: []
+  package_manager: none
+  package_manifest: none
+testing:
+  framework: smoke
+  directories:
+    - tests/
+linting:
+  formatters: []
+validation:
+  required_tasks: [build, test]
+  optional_tasks: []
+  install_task: none
+  evidence_directory: .sdlc/evidence
+tasks:
+  build:
+    executable: bash
+    args: [--version]
+  test:
+    executable: bash
+    args: [-c, "exit 3"]

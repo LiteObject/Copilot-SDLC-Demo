@@ -1,181 +1,630 @@
 <#
 .SYNOPSIS
-    Validates the SDLC state file (docs/spec.md) before advancing phases.
+    Validates the SDLC state file before a Supervisor applies a transition.
 
 .DESCRIPTION
-    Checks that docs/spec.md is well-formed and that the current phase's
-    required sections are populated. Designed to be called by the SDLC
-    Supervisor agent before advancing state, and also usable as a manual
-    pre-flight check.
+    Validates the machine-readable workflow metadata in docs/spec.md, the
+    visible state fields, the allowed transition table, prerequisite sections,
+    and gate evidence for the requested transition.
 
     Exit codes:
-      0 — All checks passed.
-      1 — State file missing or malformed.
-      2 — Current phase prerequisites not met.
+      0 - All checks passed.
+      1 - State file missing or malformed.
+      2 - Transition or phase prerequisites not met.
 
 .PARAMETER SpecPath
-    Path to the spec file. Defaults to docs/spec.md in the repo root.
+    Path to the spec file. Defaults to docs/spec.md in the repository root.
+
+.PARAMETER RepoRoot
+    Repository root used to resolve evidence paths and Git revision data.
 
 .PARAMETER Phase
-    The phase to validate prerequisites for. If omitted, validates all
-    phases up to and including the current state in the file.
+    Target phase to validate. If omitted, validates the default forward
+    transition from the current phase.
 
-.EXAMPLE
-    ./scripts/check-phase.ps1
+.PARAMETER CommitSha
+    Override the current Git commit SHA. Intended for deterministic tests.
 
-.EXAMPLE
-    ./scripts/check-phase.ps1 -Phase CODING
+.PARAMETER TreeDigest
+    Override the current working-tree digest. Intended for deterministic tests.
 #>
 [CmdletBinding()]
 param(
     [string] $SpecPath,
+    [string] $RepoRoot,
     [ValidateSet('GATHERING_REQS', 'DESIGN', 'PLANNING', 'CODING', 'REVIEW', 'TESTING', 'DEPLOYMENT_READINESS', 'DONE')]
-    [string] $Phase
+    [string] $Phase,
+    [string] $CommitSha,
+    [string] $TreeDigest
 )
 
 $ErrorActionPreference = 'Stop'
 
-# Resolve the spec path.
-$repoRoot = Split-Path -Parent $PSScriptRoot
-if (-not $SpecPath) {
-    $SpecPath = Join-Path $repoRoot 'docs/spec.md'
+$validStates = @('GATHERING_REQS', 'DESIGN', 'PLANNING', 'CODING', 'REVIEW', 'TESTING', 'DEPLOYMENT_READINESS', 'DONE')
+$phaseOrder = @{
+    'GATHERING_REQS'       = 0
+    'DESIGN'               = 1
+    'PLANNING'             = 2
+    'CODING'               = 3
+    'REVIEW'               = 4
+    'TESTING'              = 5
+    'DEPLOYMENT_READINESS' = 6
+    'DONE'                 = 7
 }
 
-if (-not (Test-Path $SpecPath)) {
+if (-not $RepoRoot) {
+    $RepoRoot = Split-Path -Parent $PSScriptRoot
+}
+if (-not $SpecPath) {
+    $SpecPath = Join-Path $RepoRoot 'docs/spec.md'
+}
+
+function ConvertFrom-YamlScalar {
+    param([string] $Value)
+
+    $trimmed = $Value.Trim()
+    if (($trimmed.StartsWith('"') -and $trimmed.EndsWith('"')) -or
+        ($trimmed.StartsWith("'") -and $trimmed.EndsWith("'"))) {
+        return $trimmed.Substring(1, $trimmed.Length - 2).Replace('\"', '"')
+    }
+    return $trimmed
+}
+
+function Read-WorkflowMetadata {
+    param([string] $Content)
+
+    $frontMatterMatch = [regex]::Match(
+        $Content,
+        '\A---\r?\n(?<frontmatter>.*?)\r?\n---(?:\r?\n|\z)',
+        [System.Text.RegularExpressions.RegexOptions]::Singleline
+    )
+    if (-not $frontMatterMatch.Success) {
+        throw "docs/spec.md must start with YAML front matter delimited by '---'."
+    }
+
+    $values = @{}
+    $lists = @{
+        planned_files  = @()
+        approved_globs = @()
+    }
+    $activeList = $null
+
+    foreach ($line in ($frontMatterMatch.Groups['frontmatter'].Value -split '\r?\n')) {
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) {
+            continue
+        }
+
+        if ($line -match '^(?<key>[A-Za-z0-9_]+):[ \t]*(?<value>.*)$') {
+            $key = $Matches.key
+            $value = ConvertFrom-YamlScalar $Matches.value
+            $values[$key] = $value
+            $activeList = $null
+            if ($key -in @('planned_files', 'approved_globs')) {
+                if ($value -eq '[]') {
+                    $lists[$key] = @()
+                }
+                elseif ($value -eq '') {
+                    $lists[$key] = @()
+                    $activeList = $key
+                }
+            }
+            continue
+        }
+
+        if ($null -ne $activeList -and $line -match '^\s*-\s*(?<item>.*)$') {
+            $item = ConvertFrom-YamlScalar $Matches.item
+            $lists[$activeList] = @($lists[$activeList] + $item)
+            continue
+        }
+
+        throw "Unsupported YAML front matter line: $line"
+    }
+
+    return [pscustomobject]@{
+        Values = $values
+        Lists  = $lists
+    }
+}
+
+function Get-MetadataValue {
+    param(
+        [hashtable] $Metadata,
+        [string] $Name
+    )
+
+    if ($Metadata.ContainsKey($Name)) {
+        return [string]$Metadata[$Name]
+    }
+    return $null
+}
+
+function ConvertTo-BooleanValue {
+    param(
+        [string] $Name,
+        [string] $Value
+    )
+
+    if ($Value -eq 'true') { return $true }
+    if ($Value -eq 'false') { return $false }
+    throw "Metadata '$Name' must be true or false, not '$Value'."
+}
+
+function Get-TextSha256 {
+    param([string] $Text)
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+        return (($sha256.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join '')
+    }
+    finally {
+        $sha256.Dispose()
+    }
+}
+
+function Get-CurrentCommitSha {
+    param([string] $Root)
+
+    Push-Location $Root
+    try {
+        $value = (& git rev-parse HEAD 2>$null | Select-Object -First 1)
+        if ($LASTEXITCODE -eq 0 -and $value) {
+            return ([string]$value).Trim()
+        }
+        return ''
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Get-CurrentTreeDigest {
+    param([string] $Root)
+
+    $parts = New-Object System.Collections.Generic.List[string]
+    Push-Location $Root
+    try {
+        $diff = (& git diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>$null | Out-String)
+        if ($LASTEXITCODE -ne 0) {
+            return ''
+        }
+        [void]$parts.Add("tracked:$diff")
+
+        $untracked = @(& git ls-files --others --exclude-standard 2>$null)
+        foreach ($relativePath in ($untracked | Sort-Object)) {
+            if ([string]$relativePath -eq '.sdlc' -or ([string]$relativePath).StartsWith('.sdlc/')) { continue }
+            $fullPath = Join-Path $Root ([string]$relativePath)
+            if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
+                $fileHash = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                [void]$parts.Add("untracked:${relativePath}:$fileHash")
+            }
+        }
+
+        return Get-TextSha256 (($parts | Sort-Object) -join "`n")
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Test-GateRecord {
+    param(
+        [string] $Name,
+        [string[]] $AllowedResults,
+        [hashtable] $Metadata,
+        [string] $ExpectedCommitSha,
+        [string] $ExpectedTreeDigest,
+        [string] $Root
+    )
+
+    $valid = $true
+    $prefix = "gate_$Name"
+    $result = Get-MetadataValue $Metadata "${prefix}_result"
+    $command = Get-MetadataValue $Metadata "${prefix}_command"
+    $commit = Get-MetadataValue $Metadata "${prefix}_commit_sha"
+    $tree = Get-MetadataValue $Metadata "${prefix}_tree_digest"
+    $timestamp = Get-MetadataValue $Metadata "${prefix}_timestamp"
+    $exitCode = Get-MetadataValue $Metadata "${prefix}_exit_code"
+    $evidence = Get-MetadataValue $Metadata "${prefix}_evidence"
+
+    if ($result -notin $AllowedResults) {
+        Write-Host "[FAIL] Gate '$Name': result must be $($AllowedResults -join ', '), not '$result'."
+        $valid = $false
+    }
+    foreach ($field in @(
+            @{ Name = 'command'; Value = $command },
+            @{ Name = 'commit_sha'; Value = $commit },
+            @{ Name = 'tree_digest'; Value = $tree },
+            @{ Name = 'timestamp'; Value = $timestamp },
+            @{ Name = 'exit_code'; Value = $exitCode },
+            @{ Name = 'evidence'; Value = $evidence }
+        )) {
+        if ([string]::IsNullOrWhiteSpace([string]$field.Value)) {
+            Write-Host "[FAIL] Gate '$Name': field '$($field.Name)' is required."
+            $valid = $false
+        }
+    }
+
+    $parsedExitCode = 0
+    if (-not [int]::TryParse($exitCode, [ref]$parsedExitCode)) {
+        Write-Host "[FAIL] Gate '$Name': exit_code must be an integer."
+        $valid = $false
+    }
+    elseif (($result -eq 'PASS' -and $parsedExitCode -ne 0) -or
+        ($result -ne 'PASS' -and $parsedExitCode -eq 0)) {
+        Write-Host "[FAIL] Gate '$Name': result '$result' conflicts with exit_code '$parsedExitCode'."
+        $valid = $false
+    }
+
+    if ($commit -ne $ExpectedCommitSha) {
+        Write-Host "[FAIL] Gate '$Name': commit_sha '$commit' is stale; expected '$ExpectedCommitSha'."
+        $valid = $false
+    }
+    if ($tree -ne $ExpectedTreeDigest) {
+        Write-Host "[FAIL] Gate '$Name': tree_digest is stale for the current working tree."
+        $valid = $false
+    }
+
+    $evidencePath = $evidence
+    if ($evidence -and -not [System.IO.Path]::IsPathRooted($evidence)) {
+        $evidencePath = Join-Path $Root $evidence
+    }
+    if (-not $evidence -or -not (Test-Path -LiteralPath $evidencePath -PathType Leaf)) {
+        Write-Host "[FAIL] Gate '$Name': evidence file '$evidence' does not exist."
+        $valid = $false
+    }
+
+    if ($valid) {
+        Write-Host "[PASS] Gate '$Name': evidence is valid for the current revision."
+    }
+    return $valid
+}
+
+function Get-ValidationContract {
+    param([string] $Root)
+
+    $configPath = Join-Path $Root '.github/sdlc-config.yml'
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return $null }
+    $content = Get-Content -LiteralPath $configPath -Raw
+    if ($content -notmatch '(?m)^\s*sdlc_config_schema:\s*1\s*$') { return $null }
+    $required = New-Object System.Collections.Generic.List[string]
+    $requiredMatch = [regex]::Match($content, '(?m)^\s*required_tasks:\s*\[(?<items>[^\]]*)\]')
+    if ($requiredMatch.Success) {
+        foreach ($item in ($requiredMatch.Groups['items'].Value -split ',')) {
+            $task = $item.Trim().Trim('"', "'")
+            if ($task) { [void]$required.Add($task) }
+        }
+    }
+    $install = 'none'
+    $installMatch = [regex]::Match($content, '(?m)^\s*install_task:\s*(?<value>[^\r\n#]+)')
+    if ($installMatch.Success) { $install = $installMatch.Groups['value'].Value.Trim().Trim('"', "'") }
+    return [pscustomobject]@{ Required = @($required); Install = $install }
+}
+
+function Test-ConfiguredTaskGates {
+    param(
+        [string] $Root,
+        [hashtable] $Metadata,
+        [string] $ExpectedCommitSha,
+        [string] $ExpectedTreeDigest,
+        [string] $TargetPhase,
+        [string] $CurrentState
+    )
+
+    $contract = Get-ValidationContract -Root $Root
+    if ($null -eq $contract) { return $true }
+    $tasks = New-Object System.Collections.Generic.List[string]
+    if ($CurrentState -eq 'CODING' -and $TargetPhase -eq 'REVIEW') {
+        foreach ($task in $contract.Required) { if ($task -ne 'test') { [void]$tasks.Add($task) } }
+        if ($contract.Install -eq 'install') { [void]$tasks.Add('install') }
+    }
+    elseif ($CurrentState -eq 'TESTING' -and $TargetPhase -in @('DONE', 'DEPLOYMENT_READINESS')) {
+        foreach ($task in $contract.Required) { [void]$tasks.Add($task) }
+        if ($contract.Install -eq 'install') { [void]$tasks.Add('install') }
+    }
+    $passed = $true
+    foreach ($task in ($tasks | Select-Object -Unique)) {
+        if (-not (Test-GateRecord -Name $task -AllowedResults @('PASS') -Metadata $Metadata -ExpectedCommitSha $ExpectedCommitSha -ExpectedTreeDigest $ExpectedTreeDigest -Root $Root)) { $passed = $false }
+    }
+    return $passed
+}
+
+function Get-SectionBody {
+    param(
+        [string] $Content,
+        [string] $Section
+    )
+
+    $pattern = '(?ms)^## ' + [regex]::Escape($Section) + '\s*\r?\n(.*?)(?=^## |^---\s*$|\z)'
+    $match = [regex]::Match($Content, $pattern)
+    if ($match.Success) {
+        return $match.Groups[1].Value
+    }
+    return $null
+}
+
+function Test-RequiredSections {
+    param(
+        [string] $Content,
+        [string] $TargetPhase,
+        [bool] $DesignRequired,
+        [bool] $DeploymentReadinessEnabled
+    )
+
+    $sections = @{
+        'GATHERING_REQS'       = @('Goal', 'Requirements', 'Acceptance Criteria', 'Out of Scope')
+        'DESIGN'               = @('Design')
+        'PLANNING'             = @('Tech Stack', 'File Structure', 'Implementation Plan')
+        'CODING'               = @('Implementation Plan')
+        'REVIEW'               = @('Review Findings')
+        'TESTING'              = @('Test Results')
+        'DEPLOYMENT_READINESS' = @('Deployment Readiness')
+        'DONE'                 = @()
+    }
+    $allPassed = $true
+    $targetIndex = $phaseOrder[$TargetPhase]
+
+    foreach ($state in $validStates) {
+        if ($phaseOrder[$state] -ge $targetIndex) {
+            break
+        }
+        if ($state -eq 'DESIGN' -and -not $DesignRequired) {
+            Write-Host "[SKIP] Phase 'DESIGN' is disabled for this project."
+            continue
+        }
+        if ($state -eq 'DEPLOYMENT_READINESS' -and -not $DeploymentReadinessEnabled) {
+            Write-Host "[SKIP] Phase 'DEPLOYMENT_READINESS' is disabled for this project."
+            continue
+        }
+
+        foreach ($section in $sections[$state]) {
+            $body = Get-SectionBody -Content $Content -Section $section
+            if ($null -eq $body) {
+                Write-Host "[FAIL] Phase '$state': section '## $section' not found."
+                $allPassed = $false
+                continue
+            }
+
+            $clean = $body
+            $clean = $clean -replace '(?s)<!--.*?-->', ''
+            $clean = $clean -replace '(?m)^_.*(?:PM|Designer|Architect|Reviewer|QA).*_\s*$', ''
+            $clean = $clean -replace '\((?:PM|Designer|Architect|Reviewer|QA)[^)]*\)', ''
+            $clean = $clean -replace '(?m)^\s*```[^\r\n]*$', ''
+            $clean = $clean -replace '(?m)^\s*-\s*\[ \]\s*$', ''
+            $clean = $clean -replace '(?m)^\s*-?\s*$', ''
+            $clean = $clean -replace '(?m)^\s*\d+\.\s*$', ''
+            $clean = $clean.Trim()
+
+            if ([string]::IsNullOrWhiteSpace($clean)) {
+                Write-Host "[FAIL] Phase '$state': section '## $section' appears empty."
+                $allPassed = $false
+            }
+            else {
+                Write-Host "[PASS] Phase '$state': section '## $section' is populated."
+            }
+        }
+    }
+    return $allPassed
+}
+
+if (-not (Test-Path -LiteralPath $SpecPath -PathType Leaf)) {
     Write-Host "[FAIL] docs/spec.md not found at: $SpecPath"
     exit 1
 }
 
-$content = Get-Content $SpecPath -Raw
-
-# ── Extract current state ──────────────────────────
-$validStates = @('GATHERING_REQS', 'DESIGN', 'PLANNING', 'CODING', 'REVIEW', 'TESTING', 'DEPLOYMENT_READINESS', 'DONE')
-$stateMatch = [regex]::Match($content, '## Current State\s*\n\s*`([^`]+)`')
-if (-not $stateMatch.Success) {
-    Write-Host "[FAIL] Could not find '## Current State' section with a valid state value."
-    exit 1
-}
-
-$currentState = $stateMatch.Groups[1].Value.Trim()
-
-if ($currentState -notin $validStates) {
-    Write-Host "[FAIL] Invalid Current State: '$currentState'. Must be one of: $($validStates -join ', ')"
-    exit 1
-}
-
-# ── Phase prerequisite checks ──────────────────────
-$phaseOrder = @{
-    'GATHERING_REQS'      = 0
-    'DESIGN'              = 1
-    'PLANNING'            = 2
-    'CODING'              = 3
-    'REVIEW'              = 4
-    'TESTING'             = 5
-    'DEPLOYMENT_READINESS' = 6
-    'DONE'                = 7
-}
-
-# Determine which phase to check.
-if ($Phase) {
-    $targetPhase = $Phase
-} else {
-    # When no explicit phase, we're validating readiness to advance FROM current.
-    $currentIndex = $phaseOrder[$currentState]
-    $nextIndex = $currentIndex + 1
-    if ($nextIndex -ge $validStates.Count) {
-        Write-Host "[PASS] Already at final state: $currentState"
-        exit 0
+$content = Get-Content -LiteralPath $SpecPath -Raw
+try {
+    $metadata = Read-WorkflowMetadata -Content $content
+    $requiredKeys = @(
+        'sdlc_schema', 'current_phase', 'design_required',
+        'deployment_readiness_enabled', 'security_gate_enabled', 'review_cycle',
+        'last_transition_to', 'planned_files', 'approved_globs'
+    )
+    foreach ($key in $requiredKeys) {
+        if (-not $metadata.Values.ContainsKey($key)) {
+            throw "Required workflow metadata '$key' is missing."
+        }
     }
-    $targetPhase = $validStates[$nextIndex]
+}
+catch {
+    Write-Host "[FAIL] $($_.Exception.Message)"
+    exit 1
 }
 
-$sections = @{
-    'GATHERING_REQS'      = @('Goal', 'Requirements', 'Acceptance Criteria', 'Out of Scope')
-    'DESIGN'              = @('Design')
-    'PLANNING'            = @('Tech Stack', 'File Structure', 'Implementation Plan')
-    'CODING'              = @('Implementation Plan')
-    'REVIEW'              = @('Review Findings')
-    'TESTING'             = @('Test Results')
-    'DEPLOYMENT_READINESS' = @('Deployment Readiness')
-    'DONE'                 = @()
+$schema = Get-MetadataValue $metadata.Values 'sdlc_schema'
+if ($schema -ne '1') {
+    Write-Host "[FAIL] Unsupported sdlc_schema '$schema'. Expected '1'."
+    exit 1
 }
 
-$targetIndex = $phaseOrder[$targetPhase]
+$currentState = Get-MetadataValue $metadata.Values 'current_phase'
+if ($currentState -notin $validStates) {
+    Write-Host "[FAIL] Invalid current_phase '$currentState'. Must be one of: $($validStates -join ', ')"
+    exit 1
+}
 
-Write-Host "Checking phase prerequisites up to: $targetPhase (current state: $currentState)"
+$visibleStateMatch = [regex]::Match($content, '## Current State\s*\r?\n\s*`([^`]+)`')
+$visibleCycleMatch = [regex]::Match($content, '## Review Cycle\s*\r?\n\s*`([^`]+)`')
+if (-not $visibleStateMatch.Success -or $visibleStateMatch.Groups[1].Value.Trim() -ne $currentState) {
+    Write-Host "[FAIL] Visible 'Current State' does not match current_phase '$currentState'."
+    exit 1
+}
+
+$reviewCycle = 0
+if (-not [int]::TryParse((Get-MetadataValue $metadata.Values 'review_cycle'), [ref]$reviewCycle) -or
+    $reviewCycle -lt 0 -or $reviewCycle -gt 3) {
+    Write-Host "[FAIL] review_cycle must be an integer from 0 through 3."
+    exit 1
+}
+if (-not $visibleCycleMatch.Success -or $visibleCycleMatch.Groups[1].Value.Trim() -ne [string]$reviewCycle) {
+    Write-Host "[FAIL] Visible 'Review Cycle' does not match review_cycle '$reviewCycle'."
+    exit 1
+}
+
+try {
+    $designRequired = ConvertTo-BooleanValue 'design_required' (Get-MetadataValue $metadata.Values 'design_required')
+    $deploymentReadinessEnabled = ConvertTo-BooleanValue 'deployment_readiness_enabled' (Get-MetadataValue $metadata.Values 'deployment_readiness_enabled')
+    $securityGateEnabled = ConvertTo-BooleanValue 'security_gate_enabled' (Get-MetadataValue $metadata.Values 'security_gate_enabled')
+}
+catch {
+    Write-Host "[FAIL] $($_.Exception.Message)"
+    exit 1
+}
+
+$lastTransitionTo = Get-MetadataValue $metadata.Values 'last_transition_to'
+if ($lastTransitionTo -ne $currentState) {
+    Write-Host "[FAIL] last_transition_to '$lastTransitionTo' does not match current_phase '$currentState'."
+    exit 1
+}
+if ($currentState -ne 'GATHERING_REQS' -and (Get-MetadataValue $metadata.Values 'last_transition_actor') -notin @('supervisor', 'migration')) {
+    Write-Host '[FAIL] Non-initial workflow states must be applied by the supervisor or an evidenced migration.'
+    exit 1
+}
+if ((Get-MetadataValue $metadata.Values 'last_transition_actor') -eq 'migration') {
+    $migrationEvidence = Get-MetadataValue $metadata.Values 'last_transition_evidence'
+    $migrationEvidencePath = if ([System.IO.Path]::IsPathRooted($migrationEvidence)) { $migrationEvidence } else { Join-Path $RepoRoot $migrationEvidence }
+    if ([string]::IsNullOrWhiteSpace($migrationEvidence) -or -not (Test-Path -LiteralPath $migrationEvidencePath -PathType Leaf)) {
+        Write-Host '[FAIL] Migration bootstrap requires an existing last_transition_evidence file.'
+        exit 1
+    }
+}
+if (($currentState -eq 'DESIGN' -and -not $designRequired) -or
+    ($currentState -eq 'DEPLOYMENT_READINESS' -and -not $deploymentReadinessEnabled)) {
+    Write-Host "[FAIL] Current phase '$currentState' is disabled by workflow metadata."
+    exit 1
+}
+
+$targetPhase = $Phase
+if (-not $targetPhase) {
+    switch ($currentState) {
+        'GATHERING_REQS' { $targetPhase = if ($designRequired) { 'DESIGN' } else { 'PLANNING' } }
+        'DESIGN' { $targetPhase = 'PLANNING' }
+        'PLANNING' { $targetPhase = 'CODING' }
+        'CODING' { $targetPhase = 'REVIEW' }
+        'REVIEW' { $targetPhase = 'TESTING' }
+        'TESTING' { $targetPhase = if ($deploymentReadinessEnabled) { 'DEPLOYMENT_READINESS' } else { 'DONE' } }
+        'DEPLOYMENT_READINESS' { $targetPhase = 'DONE' }
+        'DONE' {
+            Write-Host '[PASS] Already at final state: DONE'
+            exit 0
+        }
+    }
+}
+
+if ($targetPhase -notin $validStates) {
+    Write-Host "[FAIL] Invalid target phase '$targetPhase'. Must be one of: $($validStates -join ', ')"
+    exit 1
+}
 
 $allPassed = $true
-
-foreach ($state in $validStates) {
-    $stateIdx = $phaseOrder[$state]
-    if ($stateIdx -ge $targetIndex) {
-        # Don't check the target phase itself for completeness — we're validating
-        # that prior phases are done so we CAN enter this phase.
-        break
-    }
-
-    $requiredSections = $sections[$state]
-    if (-not $requiredSections) { continue }
-
-    # Skip DESIGN when the workflow has already bypassed it for a non-UI project.
-    if ($state -eq 'DESIGN') {
-        if ($currentState -ne 'DESIGN') {
-            Write-Host "[SKIP] Phase 'DESIGN' was bypassed for this project."
-            continue
-        }
-    }
-
-    # Skip DEPLOYMENT_READINESS if the config flag is off.
-    if ($state -eq 'DEPLOYMENT_READINESS') {
-        $configPath = Join-Path $repoRoot '.github/sdlc-config.yml'
-        if (Test-Path $configPath) {
-            $configText = Get-Content $configPath -Raw
-            if ($configText -match 'deployment_readiness_gate:\s*false') {
-                Write-Host "[SKIP] Phase 'DEPLOYMENT_READINESS' is disabled in .github/sdlc-config.yml."
-                continue
-            }
-        }
-    }
-
-    foreach ($section in $requiredSections) {
-        # Check that the section heading exists and has non-empty content after it.
-        $sectionPattern = "## $section\s*\n+(.+?)(?=\n## |\n---|\z)"
-        $sectionMatch = [regex]::Match($content, $sectionPattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
-
-        if (-not $sectionMatch.Success) {
-            Write-Host "[FAIL] Phase '$state': section '## $section' not found."
-            $allPassed = $false
-            continue
-        }
-
-        $body = $sectionMatch.Groups[1].Value.Trim()
-        # Remove common placeholder text.
-        # Remove placeholder instructions.
-        # Italic lines containing agent names: _...Agent..._
-        $body = $body -replace '(?m)^_.*(?:PM|Designer|Architect|Reviewer|QA).*_\s*$', ''
-        # Bare parenthesized agent annotations: (Agent ...)
-        $body = $body -replace '\((?:PM|Designer|Architect|Reviewer|QA)[^)]*\)', ''
-        $body = $body -replace '<!--.*?-->', ''
-        $body = $body -replace '(?m)^[ \t]*```[^\r\n]*$', '' # remove code fences, retain contents
-        $body = $body -replace '- \[ \]', ''          # remove empty checkboxes
-        $body = $body -replace '^\s*-?\s*$', ''       # remove bare list markers
-        $body = $body -replace '(?m)^[ \t]*\d+\.[ \t]*$', '' # remove empty numbered items
-        $body = $body.Trim()
-
-        if ([string]::IsNullOrWhiteSpace($body)) {
-            Write-Host "[FAIL] Phase '$state': section '## $section' appears empty."
-            $allPassed = $false
-        } else {
-            Write-Host "[PASS] Phase '$state': section '## $section' is populated."
-        }
+$transition = "$currentState -> $targetPhase"
+$allowed = @(
+    'GATHERING_REQS -> DESIGN',
+    'GATHERING_REQS -> PLANNING',
+    'DESIGN -> PLANNING',
+    'PLANNING -> CODING',
+    'CODING -> REVIEW',
+    'REVIEW -> CODING',
+    'REVIEW -> TESTING',
+    'REVIEW -> GATHERING_REQS',
+    'TESTING -> CODING',
+    'TESTING -> DEPLOYMENT_READINESS',
+    'TESTING -> DONE',
+    'DEPLOYMENT_READINESS -> CODING',
+    'DEPLOYMENT_READINESS -> DONE'
+)
+if ($transition -notin $allowed) {
+    Write-Host "[FAIL] Illegal workflow transition: $transition"
+    $allPassed = $false
+}
+if ($targetPhase -eq 'DESIGN' -and -not $designRequired) {
+    Write-Host '[FAIL] DESIGN is disabled, so the target phase is invalid.'
+    $allPassed = $false
+}
+if ($targetPhase -eq 'DEPLOYMENT_READINESS' -and -not $deploymentReadinessEnabled) {
+    Write-Host '[FAIL] DEPLOYMENT_READINESS is disabled, so the target phase is invalid.'
+    $allPassed = $false
+}
+if ($currentState -eq 'REVIEW' -and $targetPhase -eq 'CODING' -and $reviewCycle -ge 3) {
+    Write-Host '[FAIL] Review cycle cap reached; REVIEW cannot return to CODING. Escalate instead.'
+    $allPassed = $false
+}
+if ($currentState -eq 'REVIEW' -and $targetPhase -eq 'GATHERING_REQS' -and $reviewCycle -ne 3) {
+    Write-Host '[FAIL] Escalation to GATHERING_REQS requires review_cycle 3.'
+    $allPassed = $false
+}
+if ($currentState -eq 'REVIEW' -and $targetPhase -eq 'GATHERING_REQS') {
+    $escalationEvidence = Get-MetadataValue $metadata.Values 'last_transition_evidence'
+    $escalationPath = if ([System.IO.Path]::IsPathRooted($escalationEvidence)) { $escalationEvidence } else { Join-Path $RepoRoot $escalationEvidence }
+    if ([string]::IsNullOrWhiteSpace($escalationEvidence) -or -not (Test-Path -LiteralPath $escalationPath -PathType Leaf)) {
+        Write-Host '[FAIL] Review-cycle escalation requires an existing last_transition_evidence file.'
+        $allPassed = $false
     }
 }
+if ($currentState -eq 'REVIEW' -and $targetPhase -eq 'CODING' -and $reviewCycle -ge 3) {
+    $allPassed = $false
+}
+if ($currentState -eq 'REVIEW' -and $targetPhase -eq 'TESTING' -and $reviewCycle -ne 0) {
+    Write-Host '[FAIL] Approved review must reset review_cycle to 0 before TESTING.'
+    $allPassed = $false
+}
+if ($currentState -eq 'TESTING' -and $targetPhase -eq 'DONE' -and $deploymentReadinessEnabled) {
+    Write-Host '[FAIL] TESTING cannot transition directly to DONE while readiness is enabled.'
+    $allPassed = $false
+}
 
-# ── Final result ───────────────────────────────────
+$expectedCommitSha = if ($CommitSha) { $CommitSha } else { Get-CurrentCommitSha -Root $RepoRoot }
+$expectedTreeDigest = if ($TreeDigest) { $TreeDigest } else { Get-CurrentTreeDigest -Root $RepoRoot }
+
+if ($currentState -eq 'GATHERING_REQS' -and $targetPhase -in @('DESIGN', 'PLANNING')) {
+    if (-not (Test-GateRecord -Name 'requirements' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+}
+if ($currentState -eq 'PLANNING' -and $targetPhase -eq 'CODING') {
+    if (-not (Test-GateRecord -Name 'config' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+}
+if ($currentState -eq 'DESIGN' -and $targetPhase -eq 'PLANNING') {
+    if (-not (Test-GateRecord -Name 'design' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+}
+if ($currentState -eq 'PLANNING' -and $targetPhase -eq 'CODING') {
+    if (-not (Test-GateRecord -Name 'planning' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+}
+if ($currentState -eq 'CODING' -and $targetPhase -eq 'REVIEW') {
+    if (-not (Test-GateRecord -Name 'build' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+    if ($securityGateEnabled -and -not (Test-GateRecord -Name 'security' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+    if (-not (Test-ConfiguredTaskGates -Root $RepoRoot -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -TargetPhase $targetPhase -CurrentState $currentState)) { $allPassed = $false }
+}
+if ($currentState -eq 'REVIEW' -and $targetPhase -eq 'CODING') {
+    if (-not (Test-GateRecord -Name 'review' -AllowedResults @('CHANGES_REQUESTED') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+}
+if ($currentState -eq 'REVIEW' -and $targetPhase -eq 'TESTING') {
+    if (-not (Test-GateRecord -Name 'review' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+}
+if ($currentState -eq 'REVIEW' -and $targetPhase -eq 'GATHERING_REQS') {
+    if (-not (Test-GateRecord -Name 'review' -AllowedResults @('CHANGES_REQUESTED') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+}
+if ($currentState -eq 'TESTING' -and $targetPhase -eq 'CODING') {
+    if (-not (Test-GateRecord -Name 'test' -AllowedResults @('FAIL') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+}
+if ($currentState -eq 'TESTING' -and $targetPhase -in @('DEPLOYMENT_READINESS', 'DONE')) {
+    if (-not (Test-GateRecord -Name 'test' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+    if (-not (Test-ConfiguredTaskGates -Root $RepoRoot -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -TargetPhase $targetPhase -CurrentState $currentState)) { $allPassed = $false }
+}
+if ($currentState -eq 'DEPLOYMENT_READINESS' -and $targetPhase -eq 'CODING') {
+    if (-not (Test-GateRecord -Name 'deployment_readiness' -AllowedResults @('FAIL') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+}
+if ($currentState -eq 'DEPLOYMENT_READINESS' -and $targetPhase -eq 'DONE') {
+    if (-not (Test-GateRecord -Name 'deployment_readiness' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+}
+
+Write-Host "Checking phase prerequisites up to: $targetPhase (current state: $currentState)"
+if (-not (Test-RequiredSections -Content $content -TargetPhase $targetPhase -DesignRequired $designRequired -DeploymentReadinessEnabled $deploymentReadinessEnabled)) {
+    $allPassed = $false
+}
+
 if ($allPassed) {
-    Write-Host "[PASS] All prerequisite checks passed for phase: $targetPhase"
+    Write-Host "[PASS] All transition and prerequisite checks passed for phase: $targetPhase"
     exit 0
-} else {
-    Write-Host "[FAIL] Some prerequisite checks failed. See output above."
-    exit 2
 }
+
+Write-Host '[FAIL] Some transition, gate, or prerequisite checks failed. See output above.'
+exit 2

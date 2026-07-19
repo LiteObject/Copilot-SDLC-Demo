@@ -26,3 +26,7 @@ consumer project.
   whenever a template file is added, removed, or reclassified.
 - Validate a clean scaffold installation after changing template layout or
   installer behavior.
+- Keep PowerShell and Bash config validators/task runners behaviorally aligned;
+  run both `tests/phase0/` and `tests/phase1/` harnesses after changes.
+- Do not reintroduce arbitrary shell command evaluation into the task registry
+  or GitHub Actions workflows.

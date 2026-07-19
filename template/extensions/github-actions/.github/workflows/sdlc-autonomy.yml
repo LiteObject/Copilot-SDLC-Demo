@@ -1,18 +1,19 @@
 # SDLC Autonomy Workflow
 # =======================
-# Optional: validates the configured test command for issues carrying the
+# Optional: validates the configured SDLC task registry for issues carrying the
 # copilot:fix label. This workflow does not itself invoke the Copilot coding
 # agent or create a pull request.
 #
 # To trigger: add the "copilot:fix" label to any issue in this repo.
 # Configure any Copilot coding-agent assignment separately. This workflow
-# validates config, runs the test suite when enabled, and reports the result.
+# validates config, installs dependencies, runs named tasks, retains evidence,
+# and reports the result.
 #
 # Prerequisites:
 #   - Repo must be hosted on GitHub.
 #   - The "copilot:fix" label must exist in the repo.
 #   - `integrations.copilot_coding_agent` must be `true` in .github/sdlc-config.yml.
-#   - A test command must be configured in .github/sdlc-config.yml (testing.command).
+#   - A versioned task registry must be configured in .github/sdlc-config.yml.
 
 name: SDLC Autonomy Loop
 
@@ -35,7 +36,7 @@ jobs:
       - name: Install PyYAML
         run: pip install -q pyyaml
 
-      - name: Validate config
+      - name: Check integration configuration
         id: config
         run: |
           if [ ! -f .github/sdlc-config.yml ]; then
@@ -51,20 +52,20 @@ jobs:
             echo "::warning::integrations.copilot_coding_agent is not enabled in .github/sdlc-config.yml"
             exit 0
           fi
-          TEST_CMD=$(python -c "import yaml; d=yaml.safe_load(open('.github/sdlc-config.yml')) or {}; print(d.get('testing', {}).get('command') or '')")
-          if [ -z "$TEST_CMD" ]; then
-            echo "status=invalid" >> $GITHUB_OUTPUT
-            echo "::error::testing.command must be configured when the autonomy integration is enabled."
-            exit 1
-          fi
           echo "status=ready" >> $GITHUB_OUTPUT
 
-      - name: Run tests
+      - name: Validate SDLC config and run named tasks
         if: steps.config.outputs.status == 'ready'
         run: |
-          TEST_CMD=$(python -c "import yaml; d=yaml.safe_load(open('.github/sdlc-config.yml')); print(d.get('testing', {}).get('command', ''))")
-          echo "Running: $TEST_CMD"
-          eval "$TEST_CMD"
+          bash ./scripts/run-sdlc-task.sh --task all --record-spec
+
+      - name: Upload validation evidence
+        if: always() && steps.config.outputs.status == 'ready'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdlc-validation-${{ github.run_id }}
+          path: .sdlc/evidence/
+          if-no-files-found: warn
 
       - name: Post result comment
         if: always()
