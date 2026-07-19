@@ -27,20 +27,28 @@ The Developer creates/modifies ONLY files in the allowed set. If implementation 
 
 ### Step 3 — Verify (Reviewer, during REVIEW)
 
-The Reviewer compares the actual `git diff` against the allowed file set:
+The Reviewer runs the scope-audit script, which compares the actual git diff against the allowed file set:
 
 ```bash
-# List all changed files in the working tree vs main
-git diff --name-only origin/main...HEAD
+# Check uncommitted changes against the plan
+./scripts/scope-audit.sh
 
-# Or for uncommitted work:
-git diff --name-only
+# Or on Windows:
+./scripts/scope-audit.ps1
+
+# Check a branch against main:
+./scripts/scope-audit.sh origin/main
+
+# Check only staged changes:
+./scripts/scope-audit.sh staged
 ```
 
-For each changed file:
-- **In the plan** → OK.
-- **NOT in the plan** → Flag as `[SCOPE CREEP]` in review findings with the file path.
-- **Plan item not implemented** → Flag as `[MISSING]` in review findings.
+The script produces a machine-readable report with three categories:
+- `[IN_SCOPE]` — changed files that appear in the plan → OK.
+- `[SCOPE_CREEP]` — changed files NOT in the plan → flag in review findings.
+- `[MISSING]` — planned files NOT created → flag in review findings.
+
+It also emits a JSON summary for programmatic consumers. The Reviewer must run this script (not manually reason about `git diff` output) and report its results verbatim.
 
 ### Decision Rules
 

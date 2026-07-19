@@ -48,10 +48,16 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 SOURCES=(
   ".github/copilot-instructions.md"
+  ".github/sdlc-config.yml"
   ".github/agents"
   ".github/instructions"
   ".github/prompts"
+  ".github/workflows"
   "docs/spec.md"
+  "scripts/check-phase.ps1"
+  "scripts/check-phase.sh"
+  "scripts/scope-audit.ps1"
+  "scripts/scope-audit.sh"
 )
 
 # Verify we are running from a populated source repo.

@@ -1,0 +1,90 @@
+# SDLC Autonomy Workflow
+# =======================
+# Optional: validates the configured test command for issues carrying the
+# copilot:fix label. This workflow does not itself invoke the Copilot coding
+# agent or create a pull request.
+#
+# To trigger: add the "copilot:fix" label to any issue in this repo.
+# Configure any Copilot coding-agent assignment separately. This workflow
+# validates config, runs the test suite when enabled, and reports the result.
+#
+# Prerequisites:
+#   - Repo must be hosted on GitHub.
+#   - The "copilot:fix" label must exist in the repo.
+#   - `integrations.copilot_coding_agent` must be `true` in .github/sdlc-config.yml.
+#   - A test command must be configured in .github/sdlc-config.yml (testing.command).
+
+name: SDLC Autonomy Loop
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  copilot-fix:
+    if: ${{ github.event.label.name == 'copilot:fix' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PyYAML
+        run: pip install -q pyyaml
+
+      - name: Validate config
+        id: config
+        run: |
+          if [ ! -f .github/sdlc-config.yml ]; then
+            echo "::error::.github/sdlc-config.yml not found."
+            echo "enabled=false" >> $GITHUB_OUTPUT
+            echo "status=invalid" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          ENABLED=$(python -c "import yaml; d=yaml.safe_load(open('.github/sdlc-config.yml')) or {}; print('true' if d.get('integrations',{}).get('copilot_coding_agent') else 'false')")
+          echo "enabled=$ENABLED" >> $GITHUB_OUTPUT
+          if [ "$ENABLED" = "false" ]; then
+            echo "status=disabled" >> $GITHUB_OUTPUT
+            echo "::warning::integrations.copilot_coding_agent is not enabled in .github/sdlc-config.yml"
+            exit 0
+          fi
+          TEST_CMD=$(python -c "import yaml; d=yaml.safe_load(open('.github/sdlc-config.yml')) or {}; print(d.get('testing', {}).get('command') or '')")
+          if [ -z "$TEST_CMD" ]; then
+            echo "status=invalid" >> $GITHUB_OUTPUT
+            echo "::error::testing.command must be configured when the autonomy integration is enabled."
+            exit 1
+          fi
+          echo "status=ready" >> $GITHUB_OUTPUT
+
+      - name: Run tests
+        if: steps.config.outputs.status == 'ready'
+        run: |
+          TEST_CMD=$(python -c "import yaml; d=yaml.safe_load(open('.github/sdlc-config.yml')); print(d.get('testing', {}).get('command', ''))")
+          echo "Running: $TEST_CMD"
+          eval "$TEST_CMD"
+
+      - name: Post result comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const outcome = '${{ job.status }}';
+            const configStatus = '${{ steps.config.outputs.status }}';
+            const issueNumber = context.payload.issue.number;
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const body = configStatus === 'disabled'
+              ? `ℹ️ **SDLC Autonomy Loop skipped.** The Copilot coding-agent integration is disabled, so no tests were run. [View run](${runUrl})`
+              : outcome === 'success'
+              ? `✅ **SDLC Autonomy Loop completed.** The configured tests passed. [View run](${runUrl})`
+              : `❌ **SDLC Autonomy Loop failed.** Check the [workflow run](${runUrl}) for details.`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body
+            });

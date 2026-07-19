@@ -1,7 +1,7 @@
 ---
 description: "Code Reviewer worker. Use during the REVIEW phase (after CODING, before TESTING) to review the Developer's code for quality, security, and standards adherence. Approves or routes change requests back to the Developer."
 name: "Reviewer Agent"
-tools: [read, search]
+tools: [read, search, bash]
 user-invocable: false
 model: ['Claude Sonnet 4.5 (copilot)', 'GPT-5 (copilot)']
 ---

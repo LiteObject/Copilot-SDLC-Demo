@@ -1,0 +1,82 @@
+# SDLC Configuration
+# ==================
+# Single source of truth for stack-specific settings.
+# Every agent reads this via the shared copilot-instructions.md reference.
+#
+# Scaffold into your project with:
+#   ./scripts/scaffold-sdlc.ps1 -Target ../my-project
+# Then edit this file to match your stack.
+
+# ── Stack ───────────────────────────────────────────
+stack:
+  # Primary languages used in this project.
+  languages: []
+  # Example: [typescript, python]
+
+  # Frameworks in use (frontend and backend).
+  frameworks: []
+  # Example: [react, fastapi]
+
+  # Package manager / build tool.
+  package_manager: npm
+  # Examples: npm, yarn, pnpm, pip, cargo, dotnet
+
+  # The command that produces a clean build (zero errors).
+  build_command: ""
+  # Examples: npm run build, dotnet build, cargo build, make
+
+# ── Testing ─────────────────────────────────────────
+testing:
+  # Test framework the QA agent should use.
+  framework: ""
+  # Examples: jest, pytest, vitest, xunit, go test
+
+  # Command the QA agent runs to execute the full test suite.
+  command: ""
+  # Examples: npm test, pytest tests/, dotnet test, go test ./...
+
+  # Directories containing test files (relative to repo root).
+  directories:
+    - tests/
+
+# ── Linting & Formatting ────────────────────────────
+linting:
+  # Linter commands (one per language or tool).
+  commands: []
+  # Examples: [eslint src/, ruff check .]
+
+  # Formatter commands (one per language or tool).
+  formatters: []
+  # Examples: [prettier --write src/, black .]
+
+# ── Conventions ─────────────────────────────────────
+conventions:
+  # Line length target (if your formatter enforces one).
+  max_line_length: 120
+
+  # Indentation style.
+  indent: spaces  # spaces | tabs
+
+  # Quote style preference.
+  quotes: single   # single | double
+
+  # Semicolons?
+  semicolons: true
+
+# ── Integrations ────────────────────────────────────
+integrations:
+  # Enable PR-based autonomous test/fix loop via GitHub Copilot coding agent.
+  # Requires the repo to be hosted on GitHub.
+  copilot_coding_agent: false
+
+  # Enable the deployment readiness gate before DONE.
+  deployment_readiness_gate: false
+
+# ── Design System (frontend/UI projects only) ───────
+design_system:
+  # CSS framework or design system in use.
+  framework: ""
+  # Examples: tailwind, bootstrap, material-ui, custom
+
+  # Accessibility target.
+  a11y_target: WCAG 2.1 AA

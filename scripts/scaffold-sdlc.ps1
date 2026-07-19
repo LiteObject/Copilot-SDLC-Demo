@@ -35,10 +35,16 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 
 $sources = @(
     '.github/copilot-instructions.md',
+    '.github/sdlc-config.yml',
     '.github/agents',
     '.github/instructions',
     '.github/prompts',
-    'docs/spec.md'
+    '.github/workflows',
+    'docs/spec.md',
+    'scripts/check-phase.ps1',
+    'scripts/check-phase.sh',
+    'scripts/scope-audit.ps1',
+    'scripts/scope-audit.sh'
 )
 
 # Verify we are running from a populated source repo.

@@ -1,7 +1,7 @@
 ---
 description: "End-to-end SDLC orchestrator. Use when building a feature or app from scratch: gather requirements, design, plan, code, review, test, and fix bugs. Routes work to PM, Designer, Architect, Developer, Reviewer, and QA subagents."
 name: "SDLC Supervisor"
-tools: [read, search, edit, todo, agent]
+tools: [read, search, edit, todo, agent, bash]
 agents: [pm, designer, architect, developer, reviewer, qa]
 argument-hint: "Describe what you want to build"
 model: ['Claude Sonnet 4.5 (copilot)', 'GPT-5 (copilot)']
@@ -58,13 +58,14 @@ If drift is detected during `CODING`, the Developer reconciles it before writing
 
 ## Approach
 
-1. Read `docs/spec.md` to determine the current state. If it doesn't exist, start at `GATHERING_REQS`.
+1. Read `docs/spec.md` and `.github/sdlc-config.yml` to determine the current state and stack-specific settings. If `docs/spec.md` doesn't exist, start at `GATHERING_REQS`.
 2. Maintain a todo list reflecting the phases and progress.
-3. Delegate the active phase to the matching subagent with a clear, self-contained task.
-4. After each subagent returns, update the "Current State" and relevant sections of `docs/spec.md`.
-5. Advance to the next state, or loop back to `developer` if the Reviewer requests changes or QA reports failures.
-6. When tests pass, ask the user: *"Run deployment readiness check before marking done?"* If yes, set state to `DEPLOYMENT_READINESS` and delegate to `reviewer` to run the checklist in `.github/instructions/deployment-readiness.instructions.md`. If no, proceed to `DONE`.
-7. When the feature is `DONE`, produce a **session recap** — a concise summary covering: what was built, key decisions made, files changed, and any open items or follow-ups.
+3. **Before advancing state**, run `scripts/check-phase.ps1` (Windows) or `scripts/check-phase.sh` (macOS/Linux) to validate that prerequisite sections are populated. If the script fails (exit code 1 or 2), do NOT advance — route the issue back to the appropriate subagent.
+4. Delegate the active phase to the matching subagent with a clear, self-contained task.
+5. After each subagent returns, update the "Current State" and relevant sections of `docs/spec.md`.
+6. Advance to the next state, or loop back to `developer` if the Reviewer requests changes or QA reports failures.
+7. When tests pass, ask the user: *"Run deployment readiness check before marking done?"* If yes, set state to `DEPLOYMENT_READINESS` and delegate to `reviewer` to run the checklist in `.github/instructions/deployment-readiness.instructions.md`. If no, proceed to `DONE`.
+8. When the feature is `DONE`, produce a **session recap** — a concise summary covering: what was built, key decisions made, files changed, and any open items or follow-ups.
 
 ## Constraints
 
@@ -72,6 +73,8 @@ If drift is detected during `CODING`, the Developer reconciles it before writing
 - DO NOT advance past `GATHERING_REQS` until requirements are clear; if ambiguous, have `pm` ask the user.
 - DO NOT run the `DESIGN` phase for non-UI projects; route straight to `architect`.
 - ALWAYS keep `docs/spec.md` as the source of truth after every phase.
+- ALWAYS run `scripts/check-phase` before advancing state — never skip this gate.
+- Read `.github/sdlc-config.yml` to discover the project's tech stack, test command, and conventions. Pass the relevant settings (test framework, build command) to subagents in your delegation task.
 
 ## Output Format
 
