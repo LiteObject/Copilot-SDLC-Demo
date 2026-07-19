@@ -1,0 +1,46 @@
+template:
+  name: copilot-sdlc
+  version: 1.0.0
+  description: VS Code Copilot AI-SDLC customization payload.
+
+base:
+  path: base
+  installs:
+    - .github/copilot-instructions.md
+    - .github/sdlc-config.yml
+    - .github/agents/
+    - .github/instructions/
+    - .github/prompts/
+    - docs/spec.md
+    - scripts/check-phase.ps1
+    - scripts/check-phase.sh
+    - scripts/scope-audit.ps1
+    - scripts/scope-audit.sh
+
+extensions:
+  frontend:
+    path: extensions/frontend
+    description: Frontend UX and accessibility standards.
+  deployment-readiness:
+    path: extensions/deployment-readiness
+    description: Pre-deployment readiness checklist and guidance.
+  github-actions:
+    path: extensions/github-actions
+    description: Optional issue-triggered GitHub Actions validation workflow.
+
+ownership:
+  template_owned:
+    - .github/copilot-instructions.md
+    - .github/agents/**
+    - .github/instructions/**
+    - .github/prompts/**
+    - .github/workflows/**
+    - scripts/check-phase.ps1
+    - scripts/check-phase.sh
+    - scripts/scope-audit.ps1
+    - scripts/scope-audit.sh
+  project_owned:
+    - .github/sdlc-config.yml
+    - docs/spec.md
+    - src/**
+    - tests/**

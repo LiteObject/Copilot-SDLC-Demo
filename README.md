@@ -1,9 +1,11 @@
-# Copilot SDLC Demo
+# Copilot SDLC Template Authoring Repository
 
-A reference workspace showing how to build an **end-to-end SDLC experience** using only GitHub Copilot's native customization features — no backend service, no webhooks.
+This repository authors a reusable **end-to-end SDLC experience** using only
+GitHub Copilot's native customization features. It is the template source and
+maintenance workspace, not a consumer application repository.
 
 It implements the **Supervisor / Worker** multi-agent pattern described in
-[Copilot-SDLC-Agent-Design.md](Copilot-SDLC-Agent-Design.md):
+[docs/architecture/agent-design.md](docs/architecture/agent-design.md):
 
 ```
 @sdlc-supervisor  (entry point, owns the state machine)
@@ -29,9 +31,9 @@ goal is met — while you stay in control of anything irreversible.
 |---|---|---|
 | **Automations** | Work that runs on a schedule, discovers and triages without you | The SDLC Supervisor state machine advances phases automatically; prompts like `start-new-feature` and `fix-failing-tests` kick off loops |
 | **Worktrees** | Parallel agents isolated so they don't collide | Each subagent works in its own bounded phase with a clean context; the scope audit prevents cross-domain contamination |
-| **Skills** | Project knowledge written down once, read by every agent | `.github/instructions/` files codify coding standards, UX rules, testing standards, scope audit, and deployment readiness |
+| **Skills** | Project knowledge written down once, read by every agent | Base `.github/instructions/` files codify coding, testing, and scope rules; UX and deployment-readiness guidance are extensions |
 | **Sub-agents** | One agent ideates or implements; a different one checks the work | PM → Architect → Developer → Reviewer → QA chain ensures no agent grades its own output |
-| **State file** | Memory that survives between runs, outside any single conversation | `docs/spec.md` is the version-controlled source of truth tracking phase, requirements, plan, findings, and test results |
+| **State file** | Memory that survives between runs, outside any single conversation | The installed `docs/spec.md` is the version-controlled source of truth tracking phase, requirements, plan, findings, and test results |
 
 The same pattern appears across the industry — automations for heartbeat,
 worktrees for isolation, skills for compounding knowledge, sub-agents for the
@@ -44,7 +46,8 @@ architecture is the same.
 
 The classic software development lifecycle is run by a team of specialized AI
 agents instead of one general-purpose prompt. Each agent owns one phase, does its
-work, and records the result in [docs/spec.md](docs/spec.md) so the next agent has
+work, and records the result in the installed
+[`docs/spec.md`](template/base/docs/spec.md) so the next agent has
 a shared, version-controlled source of truth. A human stays in the loop —
 reviewing and accepting file edits and test runs — so this assists your SDLC
 rather than running unattended.
@@ -64,52 +67,48 @@ machine and routes work to the right agent. The optional `DESIGN` phase runs onl
 for frontend or UI-heavy projects. `DEPLOYMENT_READINESS` is an optional pre-merge
 gate that validates build, security, and configuration before marking the feature done. For the full rationale (why split the
 work, and why Copilot customization over a backend), see
-[Copilot-SDLC-Agent-Design.md](Copilot-SDLC-Agent-Design.md).
+[docs/architecture/agent-design.md](docs/architecture/agent-design.md).
 
-## What's in here (all files are examples)
+## Future Roadmap
+
+The current implementation is a lightweight, human-supervised AI-assisted SDLC
+template. [docs/roadmap.md](docs/roadmap.md) defines the dependency-ordered work
+needed to add enforceable workflow gates, wider quality and security validation,
+release and operational controls, AI-agent governance, and the lifecycle controls
+needed when the product itself uses AI.
+
+## Repository layout
+
+The repository separates reusable target content from authoring and optional
+integration content:
 
 ```
 Copilot-SDLC-Demo/
-├─ README.md                        ← this file
-├─ LICENSE                          ← MIT license
-├─ .gitignore
-├─ .github/
-│  ├─ copilot-instructions.md       ← shared rules every agent obeys
-│  ├─ sdlc-config.yml               ← stack-specific settings (languages, test cmd, linting)
-│  ├─ agents/
-│  │  ├─ sdlc-supervisor.agent.md   ← Supervisor: state machine + delegation
-│  │  ├─ pm.agent.md                ← PM worker (subagent)
-│  │  ├─ designer.agent.md          ← Designer worker (subagent, frontend only)
-│  │  ├─ architect.agent.md         ← Architect worker (subagent)
-│  │  ├─ developer.agent.md         ← Developer worker (subagent)
-│  │  ├─ reviewer.agent.md          ← Reviewer worker (subagent)
-│  │  └─ qa.agent.md                ← QA worker (subagent)
-│  ├─ instructions/
-│  │  ├─ coding-standards.instructions.md     ← applyTo source files
-│  │  ├─ frontend-ux.instructions.md          ← applyTo UI source files
-│  │  ├─ testing-standards.instructions.md    ← applyTo test files
-│  │  ├─ scope-audit.instructions.md          ← blast-radius checker
-│  │  └─ deployment-readiness.instructions.md ← pre-deploy security & build checklist
-│  ├─ prompts/
-│  │  ├─ start-new-feature.prompt.md
-│  │  ├─ fix-failing-tests.prompt.md
-│  │  └─ handoff.prompt.md                    ← agent-to-agent orientation prompt
-│  └─ workflows/
-│     └─ sdlc-autonomy.yml          ← optional CI: validate configured tests for labeled issues
+├─ template/
+│  ├─ manifest.yml                  <- template contract and ownership rules
+│  ├─ base/                         <- installed into every target repository
+│  │  ├─ .github/                   <- agents, base instructions, prompts, config
+│  │  ├─ docs/spec.md               <- installed project state template
+│  │  └─ scripts/                   <- phase and scope validation scripts
+│  └─ extensions/                   <- opt-in target capabilities
+│     ├─ deployment-readiness/
+│     ├─ frontend/
+│     └─ github-actions/
+├─ tools/
+│  ├─ scaffold-sdlc.ps1             <- Windows/PowerShell installer
+│  └─ scaffold-sdlc.sh              <- Bash installer
 ├─ docs/
-│  └─ spec.md                       ← tracked project state / source of truth
-├─ scripts/
-│  ├─ scaffold-sdlc.ps1             ← copy customization into a target repo (PowerShell)
-│  ├─ scaffold-sdlc.sh              ← copy customization into a target repo (Bash)
-│  ├─ check-phase.ps1               ← validate docs/spec.md before advancing state (PowerShell)
-│  ├─ check-phase.sh                ← validate docs/spec.md before advancing state (Bash)
-│  ├─ scope-audit.ps1               ← compare git diff against plan (PowerShell)
-│  └─ scope-audit.sh                ← compare git diff against plan (Bash)
-├─ src/                             ← (empty) where the Developer agent writes code
-│  └─ .gitkeep
-└─ tests/                           ← (empty) where the QA agent writes tests
-   └─ .gitkeep
+│  ├─ architecture/agent-design.md <- authoring and orchestration design
+│  └─ roadmap.md                    <- future implementation roadmap
+├─ .github/copilot-instructions.md  <- authoring-repository rules
+├─ README.md                        <- this file
+└─ LICENSE
 ```
+
+The payload preserves target-relative paths. For example,
+`template/base/.github/agents/` becomes `.github/agents/` in a consuming
+repository. The installers do not create `src/` or `tests/`; those directories
+belong to the consuming project's own stack.
 
 ## Prerequisites
 
@@ -118,45 +117,56 @@ Copilot-SDLC-Demo/
 - Custom agents/subagents enabled in settings. If `@sdlc-supervisor` does not
   appear in the chat agent picker, enable custom agents and **reload the window**
   (Command Palette → *Developer: Reload Window*).
+- **Bash 4 or newer** for the shell installer (`tools/scaffold-sdlc.sh`); use
+  PowerShell on Windows if Bash is unavailable.
 
-## How to use it
+## Use the generated workflow
 
-1. Open this folder as a workspace in VS Code.
+After installing the payload into a target repository:
+
+1. Open the target repository as a workspace in VS Code.
 2. In Copilot Chat, select the **`sdlc-supervisor`** agent (or type `@sdlc-supervisor`).
 3. Describe what you want to build, e.g. *"Build a todo REST API."*
 4. The supervisor walks the project through
-   `GATHERING_REQS → PLANNING → CODING → REVIEW → TESTING → [DEPLOYMENT_READINESS] → DONE`,
-   delegating to each worker and keeping [docs/spec.md](docs/spec.md) up to date as the
-   single source of truth.
+  `GATHERING_REQS → PLANNING → CODING → REVIEW → TESTING → [DEPLOYMENT_READINESS] → DONE`,
+  delegating to each worker and keeping `docs/spec.md` up to date as the
+  single source of truth.
 
 Or jump straight to a step with a prompt: type `/` in chat and pick
 **start-new-feature** or **fix-failing-tests**.
 
-## Use it in your own project
+## Install it in your own project
 
-To follow this SDLC process in a new or existing repo, copy the customization
-files into it:
+Use one of the installers to copy the base payload into a new or existing
+repository. Optional extensions are selected explicitly.
 
 ### Quick scaffold (script)
 
 From a clone of this repo, run the script for your shell and point it at a target
-folder. It copies the whole `.github` customization and `docs/spec.md`, then
-ensures `src/` and `tests/` exist:
+folder:
 
 ```powershell
 # Windows / PowerShell
-./scripts/scaffold-sdlc.ps1 -Target ../my-project
+./tools/scaffold-sdlc.ps1 -Target ../my-project
+
+# Add frontend UX and accessibility guidance
+./tools/scaffold-sdlc.ps1 -Target ../my-project -Extension frontend
 ```
 
 ```bash
 # macOS / Linux / WSL
-./scripts/scaffold-sdlc.sh ../my-project
+./tools/scaffold-sdlc.sh ../my-project
+
+# Add frontend UX and accessibility guidance
+./tools/scaffold-sdlc.sh ../my-project --extension frontend
 ```
 
-The scripts copy directories wholesale (not a hard-coded file list), so they stay
-correct as agents are added or renamed. They prompt before overwriting existing
-files — pass `-Force` (PowerShell) or `--force` (Bash) to skip the prompts. Run
-them from a clone of this repo, not an empty folder.
+The installers discover files under `template/base` and selected extension
+directories, preserve project-owned files, and record hashes in
+`.sdlc/sdlc-installer-state.json`. On later runs, `-Force` or `--force` refreshes
+only unchanged template-owned files. `.github/sdlc-config.yml` and `docs/spec.md`
+are project-owned after installation and are never overwritten. The installers
+do not create `src/` or `tests/`.
 
 ### Use a repository URL with an agent
 
@@ -179,45 +189,44 @@ script remains the source of truth for which files are copied.
 
 ### Manual copy
 
-1. Copy these into the root of your repo, preserving paths:
-   - `.github/copilot-instructions.md`
-   - `.github/sdlc-config.yml`
-   - `.github/agents/` (all seven `.agent.md` files)
-   - `.github/instructions/` (all five `.instructions.md` files)
-  - `.github/prompts/` (all three `.prompt.md` files)
-   - `.github/workflows/` (sdlc-autonomy.yml — optional CI integration)
-   - `docs/spec.md`
-   - `scripts/check-phase.ps1` and `scripts/check-phase.sh`
-   - `scripts/scope-audit.ps1` and `scripts/scope-audit.sh`
-2. Make sure your repo has `src/` and `tests/` folders (add a `.gitkeep` if empty).
-3. Reload the VS Code window so the agents are picked up.
-4. Select **`sdlc-supervisor`** and describe what you want to build.
+1. Copy the contents of `template/base/` into the root of your repo, preserving
+  target-relative paths.
+2. Copy a selected extension, such as `template/extensions/frontend/`, over the
+  same target root.
+3. Treat `.github/sdlc-config.yml` and `docs/spec.md` as project-owned files.
+4. Reload the VS Code window so the agents are picked up.
+5. Select **`sdlc-supervisor`** and describe what you want to build.
 
 ### Adapt it to your stack
 
 Start with the **configuration file** — it is the single place to set stack defaults:
 
-- **Stack, test command, linting:** edit [.github/sdlc-config.yml](.github/sdlc-config.yml).
+- **Stack, test command, linting:** edit `.github/sdlc-config.yml` in the consuming repo. The source default is [template/base/.github/sdlc-config.yml](template/base/.github/sdlc-config.yml).
   Every agent reads this file. Set `languages`, `frameworks`, `testing.command`,
   `linting.commands`, and `conventions` to match your project.
 - **Models & tools:** edit the YAML frontmatter at the top of each
   `.github/agents/*.agent.md` file.
-- **Coding conventions:** edit
-  [.github/instructions/coding-standards.instructions.md](.github/instructions/coding-standards.instructions.md)
-  (its `applyTo` controls which files it governs).
-- **Frontend UX & accessibility:** edit
-  [.github/instructions/frontend-ux.instructions.md](.github/instructions/frontend-ux.instructions.md)
-  to match your design system and accessibility target.
+- **Coding conventions:** edit the installed
+  `.github/instructions/coding-standards.instructions.md` in the consuming repo
+  (its `applyTo` controls which files it governs). The source default is
+  [template/base/.github/instructions/coding-standards.instructions.md](template/base/.github/instructions/coding-standards.instructions.md).
+- **Frontend UX & accessibility:** when the `frontend` extension is selected,
+  edit the installed `.github/instructions/frontend-ux.instructions.md` to match
+  your design system and accessibility target. The source default is
+  [template/extensions/frontend/.github/instructions/frontend-ux.instructions.md](template/extensions/frontend/.github/instructions/frontend-ux.instructions.md).
 - **Test framework & commands:** edit the `testing` section in
-  [.github/sdlc-config.yml](.github/sdlc-config.yml) and the standards in
-  [.github/instructions/testing-standards.instructions.md](.github/instructions/testing-standards.instructions.md).
-- **Default tech stack:** note your preferences in
-  [.github/copilot-instructions.md](.github/copilot-instructions.md) and
-  [.github/sdlc-config.yml](.github/sdlc-config.yml) so every agent obeys them.
+  `.github/sdlc-config.yml` and the installed
+  `.github/instructions/testing-standards.instructions.md`. The source default
+  is [template/base/.github/instructions/testing-standards.instructions.md](template/base/.github/instructions/testing-standards.instructions.md).
+- **Default tech stack:** note your preferences in the installed
+  `.github/copilot-instructions.md` and `.github/sdlc-config.yml` in the
+  consuming repo so every agent obeys them. The source default is
+  [template/base/.github/copilot-instructions.md](template/base/.github/copilot-instructions.md).
 
 ### Starting a new feature
 
-[docs/spec.md](docs/spec.md) is the tracked source of truth. For a fresh feature,
+The installed `docs/spec.md` is the tracked source of truth. The template source
+is [template/base/docs/spec.md](template/base/docs/spec.md). For a fresh feature,
 reset its **Current State** to `GATHERING_REQS` and clear the Goal, Requirements,
 Design, Plan, and Test Results sections — the supervisor refills them as it works.
 
@@ -265,7 +274,7 @@ audit but cannot edit code, which keeps review and implementation separate.
 
 > All workers set `user-invocable: false`; only `sdlc-supervisor` is invoked
 > directly. The shared rules in
-> [.github/copilot-instructions.md](.github/copilot-instructions.md) apply to every
+> [template/base/.github/copilot-instructions.md](template/base/.github/copilot-instructions.md) apply to every
 > agent (an `AGENTS.md` at the repo root is an equivalent alternative this repo
 > does not use).
 

@@ -3,8 +3,8 @@
 # Single source of truth for stack-specific settings.
 # Every agent reads this via the shared copilot-instructions.md reference.
 #
-# Scaffold into your project with:
-#   ./scripts/scaffold-sdlc.ps1 -Target ../my-project
+# From the template authoring repository, scaffold this into your project with:
+#   ./tools/scaffold-sdlc.ps1 -Target ../my-project
 # Then edit this file to match your stack.
 
 # ── Stack ───────────────────────────────────────────

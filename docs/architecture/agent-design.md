@@ -2,7 +2,7 @@
 
 A design and planning document for orchestrating requirement gathering, planning, coding, testing, and bug-fixing through a multi-agent setup built entirely on **GitHub Copilot's native customization features** (custom agents, subagents, instructions, and prompt files).
 
-> **Status:** Implemented. The customization files described here live in this repo (see [README.md](README.md)).
+> **Status:** Implemented. The reusable payload is authored under `template/base/` (see [README.md](../../README.md)).
 > **Chosen approach:** Copilot customization (in-editor, no backend service).
 > **Last updated:** 2026-06-26
 
@@ -51,7 +51,7 @@ Splitting the problem into specialized roles produces better, more focused resul
 The user interacts only with the **Supervisor**. The Supervisor tracks overall project **state** and routes the task to the right worker:
 
 ```
-State: GATHERING_REQS  →  [DESIGN]  →  PLANNING  →  CODING  →  REVIEW  →  TESTING  →  (loop back as needed)
+State: GATHERING_REQS  →  [DESIGN]  →  PLANNING  →  CODING  →  REVIEW  →  TESTING  →  [DEPLOYMENT_READINESS]  →  DONE
 ```
 
 `DESIGN` is optional and runs only for frontend or UI-heavy projects; non-UI projects skip from `GATHERING_REQS` straight to `PLANNING`.
@@ -121,7 +121,7 @@ This maps the multi-agent design onto Copilot's **native** features — no web s
 
 | Design concept | Implementation |
 |----------------|----------------|
-| **Supervisor** | A custom agent (`.agent.md`) that owns the state machine (`GATHERING_REQS → PLANNING → CODING → REVIEW → TESTING`) and delegates |
+| **Supervisor** | A custom agent (`.agent.md`) that owns the state machine (`GATHERING_REQS → PLANNING → CODING → REVIEW → TESTING → [DEPLOYMENT_READINESS]`) and delegates |
 | **PM worker** | Subagent for requirements / clarifying questions |
 | **Designer worker** | Subagent for UI/UX flows, screen states, and accessibility (frontend projects only) |
 | **Architect worker** | Subagent for file structure + tech-stack spec |
@@ -143,39 +143,45 @@ This maps the multi-agent design onto Copilot's **native** features — no web s
 
 ---
 
-## 5. Proposed File Layout
+## 5. Repository and Payload Layout
 
-All customization lives in the workspace and is committed alongside the code:
+The repository is both the authoring workspace and the source for installations.
+Only the payload under `template/base/` and selected extensions are copied into a
+consuming repository:
 
 ```
-.github/
-  copilot-instructions.md        # Repo-wide conventions all agents obey (this repo's shared-rules file)
-.github/
-  agents/
-    sdlc-supervisor.agent.md     # Supervisor: owns state machine + delegation
-    pm.agent.md                  # PM worker: requirements & clarifying questions
-    designer.agent.md            # Designer worker: UI/UX flows, states, accessibility (frontend only)
-    architect.agent.md           # Architect worker: spec + file structure + stack
-    developer.agent.md           # Developer worker: writes/edits files
-    reviewer.agent.md            # Reviewer worker: reviews code quality & security
-    qa.agent.md                  # QA worker: writes & runs tests, reports failures
-  instructions/
-    coding-standards.instructions.md   # applyTo code files
-    frontend-ux.instructions.md        # applyTo UI source files
-    testing-standards.instructions.md  # applyTo test files
-  prompts/
-    start-new-feature.prompt.md  # Repeatable kickoff
-    fix-failing-tests.prompt.md  # Repeatable test/fix kickoff
+template/
+       manifest.yml                         # payload, extension, and ownership contract
+       base/                                 # always-installed target-relative files
+              .github/
+                     copilot-instructions.md
+                     agents/
+                     instructions/
+                     prompts/
+                     sdlc-config.yml
+              docs/spec.md
+              scripts/check-phase.*
+              scripts/scope-audit.*
+       extensions/
+              frontend/.github/instructions/
+              deployment-readiness/.github/instructions/
+              github-actions/.github/workflows/
+tools/
+       scaffold-sdlc.ps1                    # Windows/PowerShell installer
+       scaffold-sdlc.sh                     # Bash installer
 ```
 
-> Exact folder conventions (e.g., `.github/agents` vs. workspace-level) will be confirmed at implementation time against the current VS Code Copilot customization docs.
+After installation, `template/base/.github/agents/` becomes `.github/agents/`
+at the target root. The base payload remains independent of a specific language
+or cloud. Frontend UX, deployment readiness, and GitHub Actions are opt-in
+extensions so a target repository receives only the capabilities it selects.
 
 ---
 
-## 6. Components to Build
+## 6. Components
 
 ### 6.1 Supervisor agent
-- Owns the state machine: `GATHERING_REQS → PLANNING → CODING → REVIEW → TESTING`.
+- Owns the state machine: `GATHERING_REQS → PLANNING → CODING → REVIEW → TESTING → [DEPLOYMENT_READINESS] → DONE`.
 - Decides which worker to delegate to based on current state and user input.
 - Maintains a tracked spec/todo file as the source of truth for project state.
 
@@ -208,7 +214,7 @@ All customization lives in the workspace and is committed alongside the code:
 
 ### 6.8 Shared rules & prompts
 - `copilot-instructions.md`: conventions every agent obeys (this repo's shared-rules file; an `AGENTS.md` at the repo root is an equivalent alternative).
-- `.instructions.md` files scoped via `applyTo` for coding, frontend UX, and testing standards.
+- `.instructions.md` files scoped via `applyTo` for coding, testing, optional frontend UX, and optional deployment-readiness standards.
 - `.prompt.md` files for repeatable kickoffs (new feature, fix failing tests).
 
 ---
@@ -233,7 +239,7 @@ All customization lives in the workspace and is committed alongside the code:
 ## 9. Resolved Decisions
 
 - [x] The tracked spec/state file lives at `docs/spec.md`.
-- [x] Folder conventions: agents in `.github/agents/`, instructions in `.github/instructions/`, prompts in `.github/prompts/`.
+- [x] Target folder conventions: agents in `.github/agents/`, instructions in `.github/instructions/`, prompts in `.github/prompts/`; authored under `template/base/`.
 - [x] A `REVIEW` phase and Reviewer agent sit between `CODING` and `TESTING`.
 - [ ] Target tech stacks the Architect/Developer agents should default to (left to each project).
 - [ ] Test framework(s) the QA agent should standardize on (left to each project).

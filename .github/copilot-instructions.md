@@ -1,59 +1,28 @@
-# Project Guidelines
+# Template Authoring Guidelines
 
-These rules apply to every agent in this workspace (Supervisor, PM, Architect, Developer, Reviewer, QA).
+This repository authors the reusable Copilot SDLC template. It is not itself a
+consumer project.
 
-## Configuration
+## Layout
 
-- Stack-specific settings (languages, frameworks, test command, linting) live in [.github/sdlc-config.yml](sdlc-config.yml). Every agent reads this file to discover project conventions. When adapting this repo to a new stack, edit `sdlc-config.yml` first — it is the single place to set language, framework, and tool defaults.
+- `template/base/` contains the files installed into every target repository.
+- `template/extensions/` contains opt-in capabilities installed only when
+  selected by the scaffold command.
+- `tools/` contains authoring-repository scaffolding and validation utilities.
+- `docs/architecture/` and `docs/roadmap.md` describe the template; they are
+  not copied into consuming repositories.
 
-## Workflow
+## Change Rules
 
-- The project moves through a state machine: `GATHERING_REQS → [DESIGN] → PLANNING → CODING → REVIEW → TESTING → [DEPLOYMENT_READINESS] → DONE`. The `DESIGN` phase is optional (frontend/UI projects only). `DEPLOYMENT_READINESS` is an optional pre-merge gate.
-- [docs/spec.md](../docs/spec.md) is the single source of truth for requirements, plan, and current state. Keep it updated as work progresses.
-- Do not skip ahead: code is only written after requirements are clear and a plan exists.
-- **Before advancing state**, the Supervisor runs `scripts/check-phase.ps1` (or `.sh`) to validate that prerequisite sections in `docs/spec.md` are populated. Do not advance if the script fails.
-- The **Developer must verify the project builds cleanly** before handing off to REVIEW.
-- The **Reviewer performs a scope audit** — run `scripts/scope-audit.ps1` (or `.sh`) and report the output. The script compares the actual git diff against the Implementation Plan in `docs/spec.md` and categorizes every changed file as `[IN_SCOPE]`, `[SCOPE_CREEP]`, or `[MISSING]`.
-
-## Code Style
-
-- Prefer small, focused files and functions with clear names.
-- Make only the changes required for the current task; avoid unrelated refactors.
-- No commented-out code, placeholder TODOs, or unused imports left behind.
-- Never hardcode secrets, keys, or tokens — use environment variables or a secrets manager.
-
-## Architecture
-
-- Application code lives in `src/`. Tests live in `tests/`.
-- Keep business logic separate from I/O (HTTP handlers, DB access, file system).
-
-## Build and Test
-
-- Tests must pass before a feature is considered done.
-- The QA agent runs the test suite in the integrated terminal and reports failures verbatim.
-- The Developer must verify a clean build (zero errors) before the REVIEW phase.
-
-## Conventions
-
-- Every change should be traceable to a requirement in [docs/spec.md](../docs/spec.md).
-- When requirements are ambiguous, ask the user rather than guessing.
-
-## Instruction Files
-
-Phase-specific standards are in `.github/instructions/`:
-- `coding-standards.instructions.md` — code quality rules for `src/`.
-- `frontend-ux.instructions.md` — UX and accessibility rules for UI files.
-- `testing-standards.instructions.md` — test quality rules for `tests/`.
-- `scope-audit.instructions.md` — blast-radius checking (declare → implement → verify). Backed by `scripts/scope-audit.ps1` / `scripts/scope-audit.sh`.
-- `deployment-readiness.instructions.md` — pre-deployment security and build checklist.
-
-## Automation Scripts
-
-Utility scripts in `scripts/` reduce LLM hallucination risk for deterministic checks:
-- `check-phase.ps1` / `check-phase.sh` — validates `docs/spec.md` is well-formed and prerequisite sections are populated before advancing state.
-- `scope-audit.ps1` / `scope-audit.sh` — compares git diff against the Implementation Plan and reports scope creep.
-- `scaffold-sdlc.ps1` / `scaffold-sdlc.sh` — copies this SDLC customization into a target project.
-
-## CI Integration
-
-An optional GitHub Actions workflow at `.github/workflows/sdlc-autonomy.yml` validates the configured test command when the `copilot:fix` label is added to an issue. It does not itself invoke the Copilot coding agent or create a pull request; configure that assignment separately. Enable test validation in `.github/sdlc-config.yml` by setting `integrations.copilot_coding_agent` to `true`.
+- Preserve the target-relative paths inside `template/base/` and extensions.
+  Agents in a consuming repository must still find `.github/`, `docs/spec.md`,
+  and `scripts/` at the repository root.
+- Keep the base payload independent of a particular language, framework, cloud,
+  or CI provider. Put optional integrations in an extension.
+- Treat `.github/sdlc-config.yml` and `docs/spec.md` as project-owned after
+  installation. Scaffold updates must not overwrite them without explicit
+  confirmation.
+- Update `template/manifest.yml`, the scaffold tools, and the documentation
+  whenever a template file is added, removed, or reclassified.
+- Validate a clean scaffold installation after changing template layout or
+  installer behavior.
