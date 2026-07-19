@@ -98,6 +98,7 @@ TEMPLATE_ROOT="$REPO_ROOT/template/base"
 EXTENSIONS_ROOT="$REPO_ROOT/template/extensions"
 STATE_RELATIVE='.sdlc/sdlc-installer-state.json'
 STATE_KEY="$STATE_RELATIVE"
+MANIFEST_PATH="$REPO_ROOT/template/manifest.yml"
 
 if [[ ! -d "$TEMPLATE_ROOT" ]]; then
   echo "Base template not found: $TEMPLATE_ROOT" >&2
@@ -195,7 +196,90 @@ resolve_extension_root() {
   (cd "$candidate" && pwd)
 }
 
+read_manifest_base_installs() {
+  local manifest="$1"
+  [[ -f "$manifest" ]] || die "Template manifest not found: $manifest"
+  tr -d '\r' < "$manifest" | awk '
+    {
+      tmp = $0
+      sub(/^[ \t]+/, "", tmp)
+      if (tmp == "" || tmp ~ /^#/) next
+      match($0, /^[ ]*/)
+      indent = RLENGTH
+      if (indent == 0) {
+        inbase = (tmp ~ /^base:/)
+        ininstalls = 0
+        next
+      }
+      if (!inbase) next
+      if (ininstalls) {
+        if (indent > installs_indent && tmp ~ /^-/) {
+          val = tmp
+          sub(/^-[ \t]*/, "", val)
+          sub(/[ \t]+$/, "", val)
+          if (val != "") print val
+          next
+        }
+        ininstalls = 0
+      }
+      if (tmp ~ /^installs:/) {
+        ininstalls = 1
+        installs_indent = indent
+      }
+    }
+  '
+}
+
+assert_manifest_covers_base() {
+  local manifest="$1"
+  (( ${#manifest_installs[@]} > 0 )) || die "Template manifest lists no base.installs entries: $manifest"
+
+  local uncovered=() unmatched=()
+  local output entry covered matched
+
+  for output in "${base_outputs[@]}"; do
+    covered=0
+    for entry in "${manifest_installs[@]}"; do
+      if [[ "$entry" == */ ]]; then
+        [[ "$output" == "$entry"* ]] && { covered=1; break; }
+      else
+        [[ "$output" == "$entry" ]] && { covered=1; break; }
+      fi
+    done
+    (( covered )) || uncovered+=("$output")
+  done
+
+  for entry in "${manifest_installs[@]}"; do
+    matched=0
+    for output in "${base_outputs[@]}"; do
+      if [[ "$entry" == */ ]]; then
+        [[ "$output" == "$entry"* ]] && { matched=1; break; }
+      else
+        [[ "$output" == "$entry" ]] && { matched=1; break; }
+      fi
+    done
+    (( matched )) || unmatched+=("$entry")
+  done
+
+  if (( ${#uncovered[@]} > 0 || ${#unmatched[@]} > 0 )); then
+    local message="template/manifest.yml is out of sync with template/base."
+    (( ${#uncovered[@]} > 0 )) && message+=" Base files missing from the manifest: ${uncovered[*]}."
+    (( ${#unmatched[@]} > 0 )) && message+=" Manifest entries with no matching base file: ${unmatched[*]}."
+    message+=" Update base.installs in $manifest."
+    die "$message"
+  fi
+}
+
 add_root_to_plan "$TEMPLATE_ROOT" "template '$TEMPLATE'"
+
+base_outputs=("${plan_order[@]}")
+manifest_installs=()
+while IFS= read -r manifest_item; do
+  [[ -n "$manifest_item" ]] || continue
+  manifest_installs+=("$(normalize_path "$manifest_item")")
+done < <(read_manifest_base_installs "$MANIFEST_PATH")
+assert_manifest_covers_base "$MANIFEST_PATH"
+
 resolved_extensions=()
 for extension in "${EXTENSIONS[@]}"; do
   extension_root="$(resolve_extension_root "$extension")"

@@ -1,3 +1,6 @@
+# Template payload manifest.
+# The scaffold installers validate template/base against base.installs below;
+# update this list whenever a base file is added, removed, or renamed.
 template:
   name: copilot-sdlc
   version: 1.0.0

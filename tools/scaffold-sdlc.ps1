@@ -313,6 +313,126 @@ function Write-InstallerState {
     [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, $Utf8NoBom)
 }
 
+function Get-ManifestBaseInstalls {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Template manifest not found: $Path"
+    }
+
+    $installs = New-Object System.Collections.ArrayList
+    $inBase = $false
+    $inInstalls = $false
+    $installsIndent = -1
+
+    foreach ($rawLine in [System.IO.File]::ReadAllLines($Path)) {
+        $line = $rawLine.TrimEnd()
+        $trimmed = $line.TrimStart()
+        if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith('#')) {
+            continue
+        }
+
+        $indent = $line.Length - $trimmed.Length
+        if ($indent -eq 0) {
+            $inBase = $trimmed.StartsWith('base:')
+            $inInstalls = $false
+            continue
+        }
+        if (-not $inBase) {
+            continue
+        }
+
+        if ($inInstalls) {
+            if ($indent -gt $installsIndent -and $trimmed.StartsWith('-')) {
+                $item = $trimmed.Substring(1).Trim()
+                if ($item) {
+                    [void]$installs.Add($item)
+                }
+                continue
+            }
+            $inInstalls = $false
+        }
+
+        if ($trimmed.StartsWith('installs:')) {
+            $inInstalls = $true
+            $installsIndent = $indent
+        }
+    }
+
+    return $installs.ToArray()
+}
+
+function Assert-ManifestCoversBase {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]] $Installs,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]] $BaseOutputs,
+
+        [Parameter(Mandatory = $true)]
+        [string] $ManifestPath
+    )
+
+    if ($Installs.Count -eq 0) {
+        throw "Template manifest lists no base.installs entries: $ManifestPath"
+    }
+
+    $normalized = @($Installs | ForEach-Object { ConvertTo-InstallerRelativePath -Path $_ })
+
+    $covers = {
+        param($entry, $output)
+        if ($entry.EndsWith('/')) {
+            return $output.StartsWith($entry, [System.StringComparison]::Ordinal)
+        }
+        return ($output -ceq $entry)
+    }
+
+    $uncovered = New-Object System.Collections.ArrayList
+    foreach ($output in $BaseOutputs) {
+        $isCovered = $false
+        foreach ($entry in $normalized) {
+            if (& $covers $entry $output) {
+                $isCovered = $true
+                break
+            }
+        }
+        if (-not $isCovered) {
+            [void]$uncovered.Add($output)
+        }
+    }
+
+    $unmatched = New-Object System.Collections.ArrayList
+    foreach ($entry in $normalized) {
+        $isMatched = $false
+        foreach ($output in $BaseOutputs) {
+            if (& $covers $entry $output) {
+                $isMatched = $true
+                break
+            }
+        }
+        if (-not $isMatched) {
+            [void]$unmatched.Add($entry)
+        }
+    }
+
+    if ($uncovered.Count -gt 0 -or $unmatched.Count -gt 0) {
+        $details = New-Object System.Collections.ArrayList
+        if ($uncovered.Count -gt 0) {
+            [void]$details.Add("base files missing from the manifest: $($uncovered -join ', ')")
+        }
+        if ($unmatched.Count -gt 0) {
+            [void]$details.Add("manifest entries with no matching base file: $($unmatched -join ', ')")
+        }
+        throw "template/manifest.yml is out of sync with template/base ($($details -join '; ')). Update base.installs in $ManifestPath."
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($Template)) {
     throw 'Template name cannot be empty.'
 }
@@ -331,6 +451,11 @@ $installOrder = New-Object System.Collections.ArrayList
 
 $baseEntries = @(Get-TemplateEntries -Root $TemplateRoot)
 Add-TemplateLayer -Entries $baseEntries -Layer "template '$Template'"
+
+$manifestPath = Join-Path $RepoRoot 'template/manifest.yml'
+$baseOutputs = @($baseEntries | ForEach-Object { ConvertTo-InstallerRelativePath -Path ([string]$_.RelativePath) })
+$manifestInstalls = @(Get-ManifestBaseInstalls -Path $manifestPath)
+Assert-ManifestCoversBase -Installs $manifestInstalls -BaseOutputs $baseOutputs -ManifestPath $manifestPath
 
 $extensionRoots = @()
 foreach ($extensionName in $Extension) {
