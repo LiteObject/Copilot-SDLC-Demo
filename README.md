@@ -163,7 +163,9 @@ folder:
 
 The installers discover files under `template/base` and selected extension
 directories, preserve project-owned files, and record hashes in
-`.sdlc/sdlc-installer-state.json`. On later runs, `-Force` or `--force` refreshes
+`.sdlc/sdlc-installer-state.json`. Before writing anything, they validate that
+`template/base` matches the `base.installs` list in `template/manifest.yml` and
+stop if the two have drifted. On later runs, `-Force` or `--force` refreshes
 only unchanged template-owned files. `.github/sdlc-config.yml` and `docs/spec.md`
 are project-owned after installation and are never overwritten. The installers
 do not create `src/` or `tests/`.
