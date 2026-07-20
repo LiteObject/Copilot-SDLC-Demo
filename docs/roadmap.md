@@ -1,6 +1,6 @@
 # Future Implementation Roadmap
 
-> Status: Proposed
+> Status: Phases 0-5 implemented; Phases 6-7 proposed
 >
 > Scope: This roadmap describes future work that turns the current Copilot-native
 > SDLC template into a more enforceable software-delivery process. Phases are
@@ -168,6 +168,11 @@ that works the same way on a developer machine and in CI.
 
 ## Phase 2: Quality and Secure Development Baseline
 
+> Implementation status: complete. Risk-based test strategy, acceptance-test
+> mapping, security design review guidance, configurable security tasks,
+> machine-readable severity policy, negative security expectations, and native
+> Windows/Linux regression CI are implemented.
+
 ### Objective
 
 Expand verification from unit-test execution and manual review into a
@@ -218,7 +223,25 @@ Use [NIST SSDF](https://csrc.nist.gov/pubs/sp/800/218/final) as the baseline
 for secure software practices. Tool choices remain project-specific; the
 enforced outcomes are evidence, triage, remediation, and repeatability.
 
+### Implemented Surfaces
+
+| Area | Implemented surface |
+|---|---|
+| Configuration | `quality_security` and `security` sections in `template/base/.github/sdlc-config.yml` |
+| Spec contract | `Test Strategy`, `Acceptance Test Mapping`, `Security Design Review`, and `Security Findings` in `template/base/docs/spec.md` |
+| Security execution | `template/base/scripts/run-security-scans.ps1` and `.sh` |
+| Blocking policy | `gate_security_*` plus machine-readable `.sdlc/evidence/security-scan.json` |
+| Review/QA guidance | `template/base/.github/instructions/security-standards.instructions.md`, testing standards, Reviewer, and QA agents |
+| Regression coverage | `tests/fixtures/phase2/` and `tests/phase2/` |
+| CI validation | `.github/workflows/phase2-validation.yml` and updated GitHub Actions extension |
+
 ## Phase 3: Release, Deployment, and Supply-Chain Assurance
+
+> Implementation status: complete. The opt-in release-assurance extension now
+> validates release configuration, creates immutable artifact manifests with
+> checksums, validates SBOMs, generates provenance, gates promotion through
+> protected environments and smoke tests, and exposes manual rollback with
+> retained evidence.
 
 ### Objective
 
@@ -262,6 +285,20 @@ source to a deployable, traceable artifact.
 - Deployment-readiness evidence is stored with the release rather than only in
   a transient chat session.
 
+### Implemented Surfaces
+
+| Area | Implemented surface |
+|---|---|
+| Configuration | `release_assurance` contract in `template/base/.github/sdlc-config.yml` |
+| Release extension | `template/extensions/release-assurance/` |
+| Config validation | `scripts/validate-release-config.ps1` and `.sh` |
+| Artifact/provenance | `scripts/prepare-release.ps1` and `.sh` |
+| Verification | `scripts/verify-release.ps1` and `.sh` |
+| Promotion | `release-assurance.yml` with staging/production environments and smoke gates |
+| Rollback | `release-rollback.yml` and configured `rollback_task` |
+| Evidence | Release manifest, SHA-256 digests, SBOM, provenance, logs, and rollback evidence |
+| Regression coverage | `tests/fixtures/phase3/` and `tests/phase3/` |
+
 ## Phase 4: Operational Readiness and Reliability
 
 ### Objective
@@ -298,6 +335,19 @@ from, and learn from production failures.
   the published runbook.
 - Post-release checks capture both technical health and the feature's intended
   outcome before a rollout is declared complete.
+
+### Implemented Surfaces
+
+| Area | Implemented surface |
+|---|---|
+| Configuration | `operational_readiness` contract in `template/base/.github/sdlc-config.yml` and revision-bound fields in `docs/spec.md` |
+| Operational extension | `template/extensions/operational-readiness/` |
+| Config validation | `scripts/validate-operational-readiness.ps1` and `.sh` |
+| Readiness gate | `scripts/run-operational-readiness.ps1` and `.sh` with health, telemetry, post-release, and staging failure-drill tasks |
+| Runbooks and policy | Readiness review, alert, escalation, incident-response, and five common runbooks |
+| Feedback evidence | `record-production-outcome.*` and `record-incident-review.*` |
+| Automation | Scheduled/manual `operational-readiness.yml` with retained evidence |
+| Regression coverage | `tests/fixtures/phase4/` and `tests/phase4/` |
 
 ## Phase 5: Governance of AI-Assisted Development
 
@@ -347,6 +397,19 @@ tools, create code, and interact with external systems.
 - High-impact actions always require an explicit, recorded human decision.
 - Prompt-injection and unsafe-tool-use scenarios are exercised as part of the
   agent evaluation suite.
+
+### Implemented Surfaces
+
+| Area | Implemented surface |
+|---|---|
+| Configuration | `ai_governance` contract in `template/base/.github/sdlc-config.yml`, `agent_evaluation` task support, and revision-bound fields in `docs/spec.md` |
+| Governance extension | `template/extensions/ai-governance/` |
+| Policy and trust boundaries | AI-assisted development policy, permission allowlist, prompt-injection threat model, evaluation plan, and representative scenarios |
+| Config validation | `scripts/validate-ai-governance.ps1` and `.sh` |
+| Change ledger | `scripts/record-ai-change.ps1` and `.sh` with allowlist and human-approval enforcement |
+| Evaluation gate | `scripts/run-ai-governance.ps1` and `.sh` with task evidence and `gate_ai_governance_*` recording |
+| Automation | Scheduled/manual `ai-governance.yml` with retained evidence |
+| Regression coverage | `tests/fixtures/phase5/` and `tests/phase5/` |
 
 ## Phase 6: Lifecycle Governance for AI-Enabled Products
 

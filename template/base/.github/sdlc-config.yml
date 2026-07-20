@@ -48,6 +48,102 @@ validation:
   install_task: install
   evidence_directory: .sdlc/evidence
 
+# ── Quality & Security ─────────────────────────────
+quality_security:
+  risk_profile: low  # low | medium | high | critical
+  required_test_layers: [unit]
+  acceptance_mapping_required: true
+
+security:
+  review_required: false
+  tasks: []
+  blocking_severities: [critical, high]
+
+# ── Release Assurance ──────────────────────────────
+# Opt-in for repositories that produce deployable artifacts.
+release_assurance:
+  enabled: false
+  artifact_task: package
+  artifact_path: .sdlc/release/artifact.tar.gz
+  sbom_task: sbom
+  sbom_path: .sdlc/release/sbom.cdx.json
+  sbom_format: cyclonedx-json
+  require_provenance: true
+  provenance_path: .sdlc/release/provenance.json
+  require_signed_artifact: false
+  signing_task: sign
+  signature_path: .sdlc/release/artifact.sig
+  deployment_task: deploy
+  smoke_test_task: smoke_test
+  rollback_task: rollback
+  release_notes_path: .sdlc/release/RELEASE_NOTES.md
+  rollback_instructions_path: .sdlc/release/ROLLBACK.md
+  promotion_environments: [development, staging, production]
+  required_approvals: [reviewer, release_manager]
+  deployment_window: ""
+
+# ── Operational Readiness ──────────────────────────
+# Opt-in for repositories that operate deployed services.
+operational_readiness:
+  enabled: false
+  service_name: ""
+  service_owner: ""
+  on_call: ""
+  health_endpoint: /health
+  required_telemetry: [structured_logs, metrics, distributed_traces, correlation_ids]
+  required_slis: [availability, latency, error_rate, throughput, business_outcome]
+  slo_availability: ""
+  slo_latency: ""
+  slo_error_rate: ""
+  slo_throughput: ""
+  slo_business_outcome: ""
+  readiness_review_items: [capacity, backup_recovery, dependency_failure, data_retention, privacy, disaster_recovery]
+  incident_severities: [sev1, sev2, sev3, sev4]
+  retention_days: 30
+  readiness_review_path: docs/operational-readiness.md
+  incident_response_path: docs/incident-response.md
+  alert_policy_path: docs/alert-policy.md
+  escalation_policy_path: docs/escalation-policy.md
+  runbooks: [docs/runbooks/high-error-rate.md, docs/runbooks/degraded-dependency.md, docs/runbooks/rollback.md, docs/runbooks/secret-rotation.md, docs/runbooks/feature-disablement.md]
+  feedback_path: .sdlc/evidence/production-outcome.json
+  incident_record_path: .sdlc/evidence/incident-review.json
+  health_check_task: health_check
+  telemetry_check_task: telemetry_check
+  failure_drill_task: failure_drill
+  post_release_check_task: post_release_check
+
+# Opt-in governance for repositories that use coding agents, MCP servers, or
+# other AI-assisted development tools.
+ai_governance:
+  enabled: false
+  policy_path: docs/ai-assisted-development-policy.md
+  permissions_path: docs/agent-permissions.md
+  threat_model_path: docs/prompt-injection-threat-model.md
+  evaluation_plan_path: docs/agent-evaluation-plan.md
+  evaluation_scenarios_path: docs/agent-evaluation-scenarios.md
+  ledger_path: .sdlc/evidence/ai-change-ledger.jsonl
+  evaluation_evidence_path: .sdlc/evidence/agent-evaluation.json
+  retention_days: 90
+  audit_retention_days: 90
+  approved_providers: [github, azure-openai]
+  approved_models: [GPT-5]
+  approved_tenants: [default-tenant]
+  permitted_repositories: [this-repository]
+  allowed_data_classifications: [public, internal, confidential]
+  prohibited_inputs: [secrets, credentials, personal_data, untrusted_instructions]
+  tool_allowlist: [read, search, edit]
+  mcp_server_allowlist: []
+  network_destination_allowlist: []
+  credential_scope_allowlist: []
+  phase_tool_grants: [GATHERING_REQS=read|search, DESIGN=read|search, PLANNING=read|search|edit, CODING=read|search|edit, REVIEW=read|search, TESTING=read|search|edit, DEPLOYMENT_READINESS=read|search, DONE=read|search]
+  restricted_actions: [commit, merge, deploy, rotate_credentials, production_config]
+  approval_required_actions: [commit, merge, deploy, rotate_credentials, production_config]
+  sandbox_required: true
+  sandbox_type: worktree
+  command_confirmation_required: true
+  untrusted_input_policy: treat_as_data
+  evaluation_task: agent_evaluation
+
 # Structured argv only. The runner invokes executable with args directly; it
 # never evaluates a shell command string.
 tasks:
@@ -66,6 +162,22 @@ tasks:
   type_check:
     executable: npm
     args: [run, typecheck]
+
+# Configure this task when ai_governance.enabled is true. Keep the command
+# structured as executable plus args; do not put a shell command string here.
+#  agent_evaluation:
+#    executable: python
+#    args: [scripts/agent-evaluation.py]
+
+# Security task examples. Add the selected IDs to security.tasks and configure
+# each executable/args record. Reports should emit severity-bearing lines or
+# use the scanner's documented exit code contract.
+#  sast:
+#    executable: semgrep
+#    args: [scan, --json, --config, auto]
+#  secrets:
+#    executable: gitleaks
+#    args: [detect, --no-banner]
 
 # ── Conventions ─────────────────────────────────────
 conventions:

@@ -9,11 +9,13 @@
     updates the matching gate_<task>_* fields in docs/spec.md.
 
 .PARAMETER Task
-    install, build, test, lint, type_check, or all. Defaults to all.
+    install, build, test, lint, type_check, package, sbom, sign, deploy,
+    smoke_test, rollback, health_check, telemetry_check, failure_drill,
+    post_release_check, or all. Defaults to all.
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('install', 'build', 'test', 'lint', 'type_check', 'all')]
+    [ValidateSet('install', 'build', 'test', 'lint', 'type_check', 'sast', 'secrets', 'dependency_audit', 'license_audit', 'container_scan', 'iac_scan', 'dast', 'security_tests', 'package', 'sbom', 'sign', 'verify_signature', 'deploy', 'smoke_test', 'rollback', 'health_check', 'telemetry_check', 'failure_drill', 'post_release_check', 'agent_evaluation', 'all')]
     [string] $Task = 'all',
     [string] $ConfigPath,
     [string] $RepoRoot,
@@ -24,6 +26,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
+if (Test-Path -LiteralPath $RepoRoot -PathType Container) { $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path }
 if (-not $ConfigPath) { $ConfigPath = Join-Path $RepoRoot '.github/sdlc-config.yml' }
 if (-not $SpecPath) { $SpecPath = Join-Path $RepoRoot 'docs/spec.md' }
 
@@ -33,7 +36,7 @@ function ConvertFrom-ConfigScalar {
     if (($trimmed.StartsWith('"') -and $trimmed.EndsWith('"')) -or ($trimmed.StartsWith("'") -and $trimmed.EndsWith("'"))) {
         return $trimmed.Substring(1, $trimmed.Length - 2).Replace('\"', '"')
     }
-    return $trimmed
+    return ([regex]::Replace($trimmed, '\s+#.*$', '')).Trim()
 }
 
 function ConvertFrom-InlineList {
@@ -199,6 +202,7 @@ if ($Task -eq 'all') {
     if ($installTask -and $installTask -ne 'none') { $taskNames += $installTask }
     $taskNames += @(Get-ConfigList $config 'validation.required_tasks')
     $taskNames += @(Get-ConfigList $config 'validation.optional_tasks')
+    $taskNames += @(Get-ConfigList $config 'security.tasks')
 }
 else { $taskNames = @($Task) }
 $seen = @{}

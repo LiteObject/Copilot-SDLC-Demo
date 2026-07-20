@@ -1,0 +1,32 @@
+name: Phase 2 Quality and Security
+
+on:
+    push:
+    pull_request:
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    bash:
+        name: Bash quality and security policy
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Run Phase 2 quality and security tests
+              shell: bash
+              run: bash tests/phase2/run-tests.sh
+
+    powershell:
+        name: PowerShell quality and security policy
+        runs-on: windows-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Run Phase 2 quality and security tests
+              shell: pwsh
+              run: ./tests/phase2/run-tests.ps1

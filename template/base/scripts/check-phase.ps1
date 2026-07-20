@@ -343,12 +343,30 @@ function Get-SectionBody {
     return $null
 }
 
+function Test-Phase2Config {
+    param([string] $Root)
+    $configPath = Join-Path $Root '.github/sdlc-config.yml'
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return $false }
+    $config = Get-Content -LiteralPath $configPath -Raw
+    return $config -match '(?m)^quality_security:\s*$'
+}
+
+    function Test-ReleaseAssuranceEnabled {
+        param([string] $Root)
+        $configPath = Join-Path $Root '.github/sdlc-config.yml'
+        if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return $false }
+        $config = Get-Content -LiteralPath $configPath -Raw
+        return $config -match '(?ms)^release_assurance:\s*\r?\n(?:(?!^\S).)*?^\s*enabled:\s*true\s*$'
+    }
+
 function Test-RequiredSections {
     param(
         [string] $Content,
         [string] $TargetPhase,
         [bool] $DesignRequired,
-        [bool] $DeploymentReadinessEnabled
+        [bool] $DeploymentReadinessEnabled,
+        [bool] $Phase2Enabled,
+        [bool] $SecurityReviewRequired
     )
 
     $sections = @{
@@ -360,6 +378,10 @@ function Test-RequiredSections {
         'TESTING'              = @('Test Results')
         'DEPLOYMENT_READINESS' = @('Deployment Readiness')
         'DONE'                 = @()
+    }
+    if ($Phase2Enabled) {
+        $sections['PLANNING'] = @($sections['PLANNING'] + 'Test Strategy' + 'Acceptance Test Mapping')
+        if ($SecurityReviewRequired) { $sections['PLANNING'] = @($sections['PLANNING'] + 'Security Design Review') }
     }
     $allPassed = $true
     $targetIndex = $phaseOrder[$TargetPhase]
@@ -394,6 +416,12 @@ function Test-RequiredSections {
             $clean = $clean -replace '(?m)^\s*-?\s*$', ''
             $clean = $clean -replace '(?m)^\s*\d+\.\s*$', ''
             $clean = $clean.Trim()
+
+            if ($section -eq 'Security Design Review' -and $SecurityReviewRequired -and $clean -match '(?i)Status:\s*NOT_REQUIRED') {
+                Write-Host "[FAIL] Phase '$state': security review is required but remains NOT_REQUIRED."
+                $allPassed = $false
+                continue
+            }
 
             if ([string]::IsNullOrWhiteSpace($clean)) {
                 Write-Host "[FAIL] Phase '$state': section '## $section' appears empty."
@@ -575,6 +603,12 @@ if ($currentState -eq 'TESTING' -and $targetPhase -eq 'DONE' -and $deploymentRea
 
 $expectedCommitSha = if ($CommitSha) { $CommitSha } else { Get-CurrentCommitSha -Root $RepoRoot }
 $expectedTreeDigest = if ($TreeDigest) { $TreeDigest } else { Get-CurrentTreeDigest -Root $RepoRoot }
+$phase2Enabled = Test-Phase2Config -Root $RepoRoot
+$securityReviewRequired = $securityGateEnabled
+$releaseAssuranceEnabled = Test-ReleaseAssuranceEnabled -Root $RepoRoot
+if ($releaseAssuranceEnabled -and $currentState -eq 'TESTING' -and $targetPhase -eq 'DONE') {
+    if (-not (Test-GateRecord -Name 'release' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+}
 
 if ($currentState -eq 'GATHERING_REQS' -and $targetPhase -in @('DESIGN', 'PLANNING')) {
     if (-not (Test-GateRecord -Name 'requirements' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
@@ -614,10 +648,11 @@ if ($currentState -eq 'DEPLOYMENT_READINESS' -and $targetPhase -eq 'CODING') {
 }
 if ($currentState -eq 'DEPLOYMENT_READINESS' -and $targetPhase -eq 'DONE') {
     if (-not (Test-GateRecord -Name 'deployment_readiness' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+        if ($releaseAssuranceEnabled -and -not (Test-GateRecord -Name 'release' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
 }
 
 Write-Host "Checking phase prerequisites up to: $targetPhase (current state: $currentState)"
-if (-not (Test-RequiredSections -Content $content -TargetPhase $targetPhase -DesignRequired $designRequired -DeploymentReadinessEnabled $deploymentReadinessEnabled)) {
+if (-not (Test-RequiredSections -Content $content -TargetPhase $targetPhase -DesignRequired $designRequired -DeploymentReadinessEnabled $deploymentReadinessEnabled -Phase2Enabled $phase2Enabled -SecurityReviewRequired $securityReviewRequired)) {
     $allPassed = $false
 }
 

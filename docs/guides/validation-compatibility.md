@@ -62,3 +62,53 @@ writes `<task>.log` and `<task>.json` with the structured command, commit SHA,
 tree digest, timestamps, exit code, result, and log path. With `--record-spec` or
 `-RecordSpec`, the runner also updates the matching `gate_<task>_*` fields in
 `docs/spec.md`.
+
+## Release Assurance
+
+For deployable repositories, install the `release-assurance` extension and set
+`release_assurance.enabled: true`. Configure structured `package`, `sbom`,
+`deploy`, `smoke_test`, and `rollback` tasks. The extension's preparation
+script creates:
+
+- `.sdlc/release/release-manifest.json` with source revision, artifact size,
+  SHA-256 digests, SBOM, provenance, environments, and required approvals;
+- an SPDX or CycloneDX SBOM reference;
+- an in-toto/SLSA-style provenance statement tied to the artifact digest;
+- release notes and rollback-instruction requirements.
+
+The release workflow promotes through protected `staging` and `production`
+environments. Configure required reviewers and separation-of-duties rules in
+GitHub environment settings. A smoke-test failure stops promotion, and
+`release-rollback.yml` provides a manual, evidence-retaining rollback path.
+
+## Security Tasks
+
+Phase 2 security tasks use the IDs `sast`, `secrets`, `dependency_audit`,
+`license_audit`, `container_scan`, `iac_scan`, `dast`, and `security_tests`.
+List applicable IDs under `security.tasks`, configure each in `tasks`, and run
+`scripts/run-security-scans.ps1` or `.sh`. A nonzero task without an explicit
+severity is classified as `high`; the configured `security.blocking_severities`
+policy determines whether the aggregate gate fails. The aggregate result is
+retained as `.sdlc/evidence/security-scan.json` and `gate_security_*`.
+
+## AI-assisted Development Governance
+
+For repositories that use coding agents, install the `ai-governance` extension
+and set `ai_governance.enabled: true`. Configure the approved providers,
+models, tenants, repositories, data classifications, tool/MCP/network/credential
+allowlists, phase grants, sandbox policy, and `agent_evaluation` task. The
+validator also requires policy, permissions, prompt-injection, evaluation-plan,
+and scenario documents.
+
+Run `scripts/validate-ai-governance.ps1` or `.sh` before agent work. Record each
+agent-mediated change with `scripts/record-ai-change.ps1` or `.sh`; the script
+rejects non-allowlisted grants and restricted actions without an `APPROVED`
+human decision. The record includes the task, role, provider, model and version,
+instruction version, tool grants and calls, changed files, validation results,
+approvals, and final disposition in the configured JSONL ledger.
+
+Run `scripts/run-ai-governance.ps1 -RecordSpec` or
+`scripts/run-ai-governance.sh --record-spec` before handoff. The configured
+evaluation task must exercise representative planning, testing, security,
+scope-drift, prompt-injection, and unsafe-tool-use scenarios. A failed task
+records `FAIL` evidence and blocks the governance handoff.

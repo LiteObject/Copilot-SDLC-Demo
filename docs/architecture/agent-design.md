@@ -164,11 +164,23 @@ template/
               scripts/migrate-spec.*
               scripts/validate-sdlc-config.*
               scripts/run-sdlc-task.*
+              scripts/run-security-scans.*
               scripts/scope-audit.*
        extensions/
               frontend/.github/instructions/
               deployment-readiness/.github/instructions/
               github-actions/.github/workflows/
+              release-assurance/.github/workflows/
+              release-assurance/.github/instructions/
+              release-assurance/scripts/
+              operational-readiness/.github/workflows/
+              operational-readiness/.github/instructions/
+              operational-readiness/docs/
+              operational-readiness/scripts/
+              ai-governance/.github/workflows/
+              ai-governance/.github/instructions/
+              ai-governance/docs/
+              ai-governance/scripts/
 tools/
        scaffold-sdlc.ps1                    # Windows/PowerShell installer
        scaffold-sdlc.sh                     # Bash installer
@@ -177,6 +189,7 @@ tools/
 The authoring repository also runs the Phase 0 and Phase 1 validator, migration,
 and task suites from `.github/workflows/phase0-validation.yml` and
 `.github/workflows/phase1-validation.yml` on native Ubuntu and Windows runners.
+Phase 3 release-bundle tests run from `.github/workflows/phase3-validation.yml`.
 
 After installation, `template/base/.github/agents/` becomes `.github/agents/`
 at the target root. The base payload remains independent of a specific language
@@ -232,6 +245,28 @@ extensions so a target repository receives only the capabilities it selects.
 - `.github/sdlc-config.yml` uses schema version 1 and a named task registry with structured executable/args records.
 - `validate-sdlc-config` validates package-manager compatibility, manifests, test directories, task completeness, and executable availability.
 - `run-sdlc-task` invokes the same named tasks locally and in CI, retaining logs and JSON evidence tied to the source revision.
+
+### 6.10 Quality and secure development
+- The Architect records risk profile, required test layers, acceptance-criterion mappings, and security-design impacts in `docs/spec.md` before coding.
+- The Reviewer runs configured security tasks through `run-security-scans`, which emits machine-readable findings and blocks configured severities.
+- QA adds risk-selected and negative security coverage rather than assuming every feature needs only unit tests.
+
+### 6.11 Release assurance
+- The opt-in `release-assurance` extension validates release configuration and creates a checksum-bound artifact manifest, SBOM, and SLSA-style provenance statement.
+- GitHub environments provide human approval for staging and production promotion; smoke tests gate each promotion.
+- A separate manual workflow invokes the configured rollback task and retains the incident reference and evidence.
+
+### 6.12 Operational readiness
+- The opt-in `operational-readiness` extension validates service ownership, health endpoints, structured logs, metrics, traces, correlation identifiers, SLIs, SLOs, review items, runbooks, and incident policy.
+- `run-operational-readiness` executes health, telemetry, and post-release checks and can run a staging failure drill that blocks on alert, diagnosis, or rollback failure.
+- `record-production-outcome` and `record-incident-review` retain technical health, business outcome, user feedback, incident severity, and corrective-action evidence under `.sdlc/evidence/`.
+- A scheduled and manually triggered workflow uploads the evidence and keeps the staging failure drill repeatable.
+
+### 6.13 AI-assisted development governance
+- The opt-in `ai-governance` extension validates approved providers, models, tenants, repositories, data classifications, tools, MCP servers, network destinations, credential scopes, phase grants, sandbox requirements, and untrusted-input controls.
+- `record-ai-change` rejects non-allowlisted boundaries and restricted actions without an explicit human approval, then appends task, agent, model, instruction, grant, tool-call, file, validation, approval, and disposition evidence to a JSONL ledger.
+- `run-ai-governance` executes the configured representative and adversarial evaluation task, records revision-bound results, and can update the `gate_ai_governance_*` fields in `docs/spec.md`.
+- The extension instructions treat repository content, issue text, web pages, retrieved documents, model output, and tool output as untrusted data. The workflow retains validation and evaluation evidence without granting write or deployment permissions.
 
 ---
 

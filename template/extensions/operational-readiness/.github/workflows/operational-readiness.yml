@@ -1,0 +1,56 @@
+name: Operational Readiness
+
+on:
+    workflow_dispatch:
+        inputs:
+            run_failure_drill:
+                description: Run the staging alert, diagnosis, and rollback drill
+                required: true
+                default: false
+                type: boolean
+    schedule:
+        - cron: "17 4 * * 1"
+
+permissions:
+    contents: read
+
+jobs:
+    operational-readiness:
+        name: Validate operational readiness
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+            - name: Detect operational readiness
+              id: operational-config
+              shell: bash
+              run: |
+                  enabled=false
+                  if awk '/^operational_readiness:/{found=1; next} found && /^[^[:space:]]/{exit} found && /enabled:[[:space:]]*true/{enabled=1} END { if (enabled) print "true" }' .github/sdlc-config.yml | grep -q true; then
+                    enabled=true
+                  fi
+                  echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+
+            - name: Validate operational readiness contract
+              if: steps.operational-config.outputs.enabled == 'true'
+              shell: bash
+              run: bash scripts/validate-operational-readiness.sh
+
+            - name: Run health, telemetry, and post-release checks
+              if: steps.operational-config.outputs.enabled == 'true'
+              shell: bash
+              run: bash scripts/run-operational-readiness.sh --record-spec
+
+            - name: Run staging failure drill
+              if: steps.operational-config.outputs.enabled == 'true' && inputs.run_failure_drill == true
+              shell: bash
+              run: bash scripts/run-operational-readiness.sh --failure-drill --record-spec
+
+            - name: Upload operational evidence
+              if: always() && steps.operational-config.outputs.enabled == 'true'
+              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+              with:
+                  name: operational-readiness-${{ github.run_id }}
+                  path: .sdlc/evidence/
+                  if-no-files-found: warn

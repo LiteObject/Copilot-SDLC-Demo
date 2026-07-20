@@ -61,6 +61,16 @@ Fixture files.
 
 - [x] Prepare fixture.
 
+## Test Strategy
+
+Risk: low. Required layer: unit.
+
+## Acceptance Test Mapping
+
+| Acceptance criterion | Test or manual verification | Evidence / owner |
+|---|---|---|
+| Build gate is recorded | Named build task | fixture |
+
 ## Review Findings
 
 Not run.

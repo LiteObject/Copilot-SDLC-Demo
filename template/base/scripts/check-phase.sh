@@ -220,6 +220,11 @@ DESIGN_REQUIRED="$(meta_get design_required)"
 DEPLOYMENT_READINESS_ENABLED="$(meta_get deployment_readiness_enabled)"
 SECURITY_GATE_ENABLED="$(meta_get security_gate_enabled)"
 
+release_assurance_enabled() {
+    [[ -f "$REPO_ROOT/.github/sdlc-config.yml" ]] || return 1
+    awk '/^release_assurance:[[:space:]]*$/{found=1; next} found && /^[^[:space:]]/{exit} found && /^[[:space:]]+enabled:[[:space:]]*true[[:space:]]*$/{enabled=1} END { exit(enabled ? 0 : 1) }' "$REPO_ROOT/.github/sdlc-config.yml"
+}
+
 if [[ "$(meta_get last_transition_to)" != "$CURRENT_STATE" ]]; then
     echo "[FAIL] last_transition_to '$(meta_get last_transition_to)' does not match current_phase '$CURRENT_STATE'."
     exit 1
@@ -302,6 +307,9 @@ fi
 if [[ "$CURRENT_STATE" == 'TESTING' && "$TARGET_PHASE" == 'DONE' && "$DEPLOYMENT_READINESS_ENABLED" == 'true' ]]; then
     echo '[FAIL] TESTING cannot transition directly to DONE while readiness is enabled.'
     ALL_PASSED=0
+fi
+if release_assurance_enabled && [[ "$CURRENT_STATE" == 'TESTING' && "$TARGET_PHASE" == 'DONE' ]]; then
+    test_gate release PASS || ALL_PASSED=0
 fi
 
 sha256_text() {
@@ -490,6 +498,10 @@ section_is_populated() {
     [[ -n "$clean" ]]
 }
 
+phase2_enabled() {
+    [[ -f "$REPO_ROOT/.github/sdlc-config.yml" ]] && grep -Eq '^quality_security:[[:space:]]*$' "$REPO_ROOT/.github/sdlc-config.yml"
+}
+
 declare -A REQUIRED_SECTIONS=(
     [GATHERING_REQS]='Goal|Requirements|Acceptance Criteria|Out of Scope'
     [DESIGN]='Design'
@@ -505,6 +517,8 @@ check_required_sections() {
     local target_index="${PHASE_INDEX[$TARGET_PHASE]}"
     local state section required_sections
     local passed=1
+    local phase2=0
+    phase2_enabled && phase2=1
     for state in "${VALID_STATES[@]}"; do
         (( PHASE_INDEX[$state] >= target_index )) && break
         if [[ "$state" == 'DESIGN' && "$DESIGN_REQUIRED" != 'true' ]]; then
@@ -516,9 +530,18 @@ check_required_sections() {
             continue
         fi
         required_sections="${REQUIRED_SECTIONS[$state]}"
+        if (( phase2 == 1 )) && [[ "$state" == 'PLANNING' ]]; then
+            required_sections+='|Test Strategy|Acceptance Test Mapping'
+            [[ "$SECURITY_GATE_ENABLED" != 'true' ]] || required_sections+='|Security Design Review'
+        fi
         [[ -n "$required_sections" ]] || continue
         IFS='|' read -r -a section_list <<< "$required_sections"
         for section in "${section_list[@]}"; do
+            if [[ "$section" == 'Security Design Review' && "$SECURITY_GATE_ENABLED" == 'true' ]] && get_section_body "$section" | grep -Eiq 'Status:[[:space:]]*NOT_REQUIRED'; then
+                echo "[FAIL] Phase '$state': security review is required but remains NOT_REQUIRED."
+                passed=0
+                continue
+            fi
             if section_is_populated "$section"; then
                 echo "[PASS] Phase '$state': section '## $section' is populated."
             else
@@ -571,6 +594,7 @@ if [[ "$CURRENT_STATE" == 'DEPLOYMENT_READINESS' && "$TARGET_PHASE" == 'CODING' 
 fi
 if [[ "$CURRENT_STATE" == 'DEPLOYMENT_READINESS' && "$TARGET_PHASE" == 'DONE' ]]; then
     test_gate deployment_readiness PASS || ALL_PASSED=0
+    if release_assurance_enabled; then test_gate release PASS || ALL_PASSED=0; fi
 fi
 
 if check_required_sections; then

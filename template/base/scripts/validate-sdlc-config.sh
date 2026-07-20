@@ -102,6 +102,8 @@ unquote_value() {
         value="${value//\\\"/\"}"
     elif [[ ${#value} -ge 2 && "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
         value="${value:1:${#value}-2}"
+    else
+        value="$(printf '%s' "$value" | sed -E 's/[[:space:]]+#.*$//')"
     fi
     printf '%s' "$value"
 }
@@ -223,7 +225,9 @@ command_display() {
 PACKAGE_MANAGER="$(get_value stack.package_manager)"
 MANIFEST="$(get_value stack.package_manifest)"
 ALLOWED_PACKAGE_MANAGERS=(npm yarn pnpm pip poetry cargo dotnet go none)
-ALLOWED_TASKS=(install build test lint type_check)
+ALLOWED_TASKS=(install build test lint type_check sast secrets dependency_audit license_audit container_scan iac_scan dast security_tests package sbom sign verify_signature deploy smoke_test rollback health_check telemetry_check failure_drill post_release_check agent_evaluation)
+ALLOWED_TEST_LAYERS=(unit integration contract api e2e accessibility performance resilience fuzz property)
+ALLOWED_SEVERITIES=(critical high medium low info)
 
 if [[ "$(get_value sdlc_config_schema)" != '1' ]]; then
     add_error 'sdlc_config_schema must be 1.'
@@ -272,8 +276,8 @@ for required in build test; do
 done
 for task in "${REQUIRED_TASKS[@]}" "${OPTIONAL_TASKS[@]}"; do
     valid=0
-    for allowed in build test lint type_check; do [[ "$task" == "$allowed" ]] && valid=1; done
-    (( valid == 1 )) || add_error "Unknown validation task '$task'. Use build, test, lint, or type_check."
+    for allowed in build test lint type_check sast secrets dependency_audit license_audit container_scan iac_scan dast security_tests package sbom sign verify_signature deploy smoke_test rollback health_check telemetry_check failure_drill post_release_check; do [[ "$task" == "$allowed" ]] && valid=1; done
+    (( valid == 1 )) || add_error "Unknown validation task '$task'."
 done
 for required in "${REQUIRED_TASKS[@]}"; do
     for optional in "${OPTIONAL_TASKS[@]}"; do
@@ -290,7 +294,41 @@ if [[ "$PACKAGE_MANAGER" != 'none' && "$INSTALL_TASK" == 'none' ]]; then
     add_error 'validation.install_task must be install for a managed package_manager.'
 fi
 
-TASKS_TO_CHECK=("${REQUIRED_TASKS[@]}" "${OPTIONAL_TASKS[@]}")
+RISK_PROFILE="$(get_value quality_security.risk_profile)"
+case "$RISK_PROFILE" in low|medium|high|critical) ;; *) add_error "quality_security.risk_profile '$RISK_PROFILE' must be low, medium, high, or critical." ;; esac
+get_list quality_security.required_test_layers
+TEST_LAYERS=("${LIST_RESULT[@]}")
+if (( ${#TEST_LAYERS[@]} == 0 )); then add_error 'quality_security.required_test_layers must contain at least one test layer.'; fi
+for layer in "${TEST_LAYERS[@]}"; do
+    valid=0
+    for allowed in "${ALLOWED_TEST_LAYERS[@]}"; do [[ "$layer" == "$allowed" ]] && valid=1; done
+    (( valid == 1 )) || add_error "Unsupported required test layer '$layer'."
+done
+MAPPING_REQUIRED="$(get_value quality_security.acceptance_mapping_required)"
+[[ "$MAPPING_REQUIRED" == true || "$MAPPING_REQUIRED" == false ]] || add_error 'quality_security.acceptance_mapping_required must be true or false.'
+SECURITY_REVIEW_REQUIRED="$(get_value security.review_required)"
+[[ "$SECURITY_REVIEW_REQUIRED" == true || "$SECURITY_REVIEW_REQUIRED" == false ]] || add_error 'security.review_required must be true or false.'
+AI_GOVERNANCE_ENABLED="$(get_value ai_governance.enabled false)"
+get_list security.tasks
+SECURITY_TASKS=("${LIST_RESULT[@]}")
+get_list security.blocking_severities
+BLOCKING_SEVERITIES=("${LIST_RESULT[@]}")
+if (( ${#BLOCKING_SEVERITIES[@]} == 0 )); then add_error 'security.blocking_severities must contain at least one severity.'; fi
+for severity in "${BLOCKING_SEVERITIES[@]}"; do
+    valid=0
+    for allowed in "${ALLOWED_SEVERITIES[@]}"; do [[ "$severity" == "$allowed" ]] && valid=1; done
+    (( valid == 1 )) || add_error "Unsupported blocking severity '$severity'."
+done
+for security_task in "${SECURITY_TASKS[@]}"; do
+    valid=0
+    for allowed in sast secrets dependency_audit license_audit container_scan iac_scan dast security_tests; do [[ "$security_task" == "$allowed" ]] && valid=1; done
+    (( valid == 1 )) || add_error "Unsupported security task '$security_task'."
+done
+if [[ "$SECURITY_REVIEW_REQUIRED" == true && ${#SECURITY_TASKS[@]} -eq 0 ]]; then
+    WARNINGS+=('security.review_required is true but security.tasks is empty; configure at least one scanner or security test task.')
+fi
+
+TASKS_TO_CHECK=("${REQUIRED_TASKS[@]}" "${OPTIONAL_TASKS[@]}" "${SECURITY_TASKS[@]}")
 [[ "$INSTALL_TASK" == 'none' ]] || TASKS_TO_CHECK+=("$INSTALL_TASK")
 for task in "${!TASK_EXEC[@]}"; do
     valid=0
@@ -368,6 +406,14 @@ RECORD_PATH="$RECORD_DIRECTORY/config-validation.json"
     json_escape "$PACKAGE_MANAGER"
     printf ',"required_tasks":'
     json_array "${REQUIRED_TASKS[@]}"
+    printf ',"risk_profile":'
+    json_escape "$RISK_PROFILE"
+    printf ',"required_test_layers":'
+    json_array "${TEST_LAYERS[@]}"
+    printf ',"security_tasks":'
+    json_array "${SECURITY_TASKS[@]}"
+    printf ',"blocking_severities":'
+    json_array "${BLOCKING_SEVERITIES[@]}"
     printf ',"optional_tasks":'
     json_array "${OPTIONAL_TASKS[@]}"
     printf ',"command":"validate-sdlc-config","commit_sha":'
@@ -405,6 +451,8 @@ if (( RECORD_SPEC == 1 )); then
     set_spec_field gate_config_timestamp "\"$TIMESTAMP\""
     if (( ${#ERRORS[@]} == 0 )); then set_spec_field gate_config_exit_code '0'; set_spec_field gate_config_result 'PASS'; else set_spec_field gate_config_exit_code '1'; set_spec_field gate_config_result 'FAIL'; fi
     set_spec_field gate_config_evidence "\"$relative_evidence\""
+    [[ "$SECURITY_REVIEW_REQUIRED" != true ]] || set_spec_field security_gate_enabled true
+    [[ "$AI_GOVERNANCE_ENABLED" != true ]] || set_spec_field ai_governance_enabled true
     echo "[INFO] Recorded gate_config_* in $SPEC_PATH"
 fi
 

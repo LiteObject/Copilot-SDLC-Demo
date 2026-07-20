@@ -23,6 +23,8 @@ base:
     - scripts/validate-sdlc-config.sh
     - scripts/run-sdlc-task.ps1
     - scripts/run-sdlc-task.sh
+    - scripts/run-security-scans.ps1
+    - scripts/run-security-scans.sh
     - scripts/scope-audit.ps1
     - scripts/scope-audit.sh
 
@@ -36,6 +38,15 @@ extensions:
   github-actions:
     path: extensions/github-actions
     description: Optional issue-triggered GitHub Actions validation workflow.
+  release-assurance:
+    path: extensions/release-assurance
+    description: Artifact, SBOM, provenance, promotion, smoke-test, and rollback assurance.
+  operational-readiness:
+    path: extensions/operational-readiness
+    description: Observability, service objectives, incident response, runbooks, and production feedback controls.
+  ai-governance:
+    path: extensions/ai-governance
+    description: AI-assisted development policy, least-privilege permissions, prompt-injection resistance, audit ledger, and agent evaluation controls.
 
 ownership:
   template_owned:
@@ -52,6 +63,8 @@ ownership:
     - scripts/validate-sdlc-config.sh
     - scripts/run-sdlc-task.ps1
     - scripts/run-sdlc-task.sh
+    - scripts/run-security-scans.ps1
+    - scripts/run-security-scans.sh
     - scripts/scope-audit.ps1
     - scripts/scope-audit.sh
   project_owned:

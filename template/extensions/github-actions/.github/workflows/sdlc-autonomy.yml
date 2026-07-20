@@ -59,6 +59,11 @@ jobs:
         run: |
           bash ./scripts/run-sdlc-task.sh --task all --record-spec
 
+      - name: Run security scan policy
+        if: steps.config.outputs.status == 'ready'
+        run: |
+          bash ./scripts/run-security-scans.sh --record-spec
+
       - name: Upload validation evidence
         if: always() && steps.config.outputs.status == 'ready'
         uses: actions/upload-artifact@v4

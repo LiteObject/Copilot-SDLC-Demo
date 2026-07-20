@@ -3,6 +3,8 @@ sdlc_schema: 1
 current_phase: GATHERING_REQS
 design_required: false
 deployment_readiness_enabled: false
+operational_readiness_enabled: false
+ai_governance_enabled: false
 security_gate_enabled: false
 review_cycle: 0
 revision_commit_sha: ""
@@ -91,6 +93,48 @@ gate_type_check_timestamp: ""
 gate_type_check_exit_code: ""
 gate_type_check_result: NOT_RUN
 gate_type_check_evidence: ""
+gate_package_command: ""
+gate_package_commit_sha: ""
+gate_package_tree_digest: ""
+gate_package_timestamp: ""
+gate_package_exit_code: ""
+gate_package_result: NOT_RUN
+gate_package_evidence: ""
+gate_deploy_command: ""
+gate_deploy_commit_sha: ""
+gate_deploy_tree_digest: ""
+gate_deploy_timestamp: ""
+gate_deploy_exit_code: ""
+gate_deploy_result: NOT_RUN
+gate_deploy_evidence: ""
+gate_sbom_command: ""
+gate_sbom_commit_sha: ""
+gate_sbom_tree_digest: ""
+gate_sbom_timestamp: ""
+gate_sbom_exit_code: ""
+gate_sbom_result: NOT_RUN
+gate_sbom_evidence: ""
+gate_release_command: ""
+gate_release_commit_sha: ""
+gate_release_tree_digest: ""
+gate_release_timestamp: ""
+gate_release_exit_code: ""
+gate_release_result: NOT_RUN
+gate_release_evidence: ""
+gate_smoke_test_command: ""
+gate_smoke_test_commit_sha: ""
+gate_smoke_test_tree_digest: ""
+gate_smoke_test_timestamp: ""
+gate_smoke_test_exit_code: ""
+gate_smoke_test_result: NOT_RUN
+gate_smoke_test_evidence: ""
+gate_rollback_command: ""
+gate_rollback_commit_sha: ""
+gate_rollback_tree_digest: ""
+gate_rollback_timestamp: ""
+gate_rollback_exit_code: ""
+gate_rollback_result: NOT_RUN
+gate_rollback_evidence: ""
 gate_deployment_readiness_command: ""
 gate_deployment_readiness_commit_sha: ""
 gate_deployment_readiness_tree_digest: ""
@@ -98,6 +142,48 @@ gate_deployment_readiness_timestamp: ""
 gate_deployment_readiness_exit_code: ""
 gate_deployment_readiness_result: NOT_RUN
 gate_deployment_readiness_evidence: ""
+gate_health_check_command: ""
+gate_health_check_commit_sha: ""
+gate_health_check_tree_digest: ""
+gate_health_check_timestamp: ""
+gate_health_check_exit_code: ""
+gate_health_check_result: NOT_RUN
+gate_health_check_evidence: ""
+gate_telemetry_check_command: ""
+gate_telemetry_check_commit_sha: ""
+gate_telemetry_check_tree_digest: ""
+gate_telemetry_check_timestamp: ""
+gate_telemetry_check_exit_code: ""
+gate_telemetry_check_result: NOT_RUN
+gate_telemetry_check_evidence: ""
+gate_failure_drill_command: ""
+gate_failure_drill_commit_sha: ""
+gate_failure_drill_tree_digest: ""
+gate_failure_drill_timestamp: ""
+gate_failure_drill_exit_code: ""
+gate_failure_drill_result: NOT_RUN
+gate_failure_drill_evidence: ""
+gate_post_release_check_command: ""
+gate_post_release_check_commit_sha: ""
+gate_post_release_check_tree_digest: ""
+gate_post_release_check_timestamp: ""
+gate_post_release_check_exit_code: ""
+gate_post_release_check_result: NOT_RUN
+gate_post_release_check_evidence: ""
+gate_operational_readiness_command: ""
+gate_operational_readiness_commit_sha: ""
+gate_operational_readiness_tree_digest: ""
+gate_operational_readiness_timestamp: ""
+gate_operational_readiness_exit_code: ""
+gate_operational_readiness_result: NOT_RUN
+gate_operational_readiness_evidence: ""
+gate_ai_governance_command: ""
+gate_ai_governance_commit_sha: ""
+gate_ai_governance_tree_digest: ""
+gate_ai_governance_timestamp: ""
+gate_ai_governance_exit_code: ""
+gate_ai_governance_result: NOT_RUN
+gate_ai_governance_evidence: ""
 ---
 
 # Project Spec
@@ -176,6 +262,30 @@ _(Architect — ordered files/modules, each mapped to the requirement(s) it sati
 
 - [ ]
 
+## Test Strategy
+
+_(Architect — risk profile, required test layers, and rationale. Select from unit, integration, contract/API, browser/end-to-end, accessibility, performance, resilience, fuzz, and property-based tests.)_
+
+## Acceptance Test Mapping
+
+_(PM/Architect — map every acceptance criterion to an automated test or an owned manual verification with evidence.)_
+
+| Acceptance criterion | Test or manual verification | Evidence / owner |
+|---|---|---|
+
+## Security Design Review
+
+_(Architect/Reviewer — required when the configured risk or security review policy says so. Record trust boundaries, external input, authentication/authorization, data stores, commands, secrets, APIs, and infrastructure impacts.)_
+
+Status: NOT_REQUIRED
+
+## Security Findings
+
+_(Reviewer — machine-readable scan summary and dispositions. Critical/high findings block delivery unless an explicit, traceable exception is recorded.)_
+
+| ID | Severity | Finding | Disposition | Owner | Due date | Evidence |
+|---|---|---|---|---|---|---|
+
 ---
 
 ## Review Findings
@@ -202,3 +312,18 @@ _(Reviewer — optional pre-deployment gate. Checklist results per `.github/inst
 | 4 | Config  | ⬜ | |
 | 5 | Deps    | ⬜ | |
 | 6 | Cleanup | ⬜ | |
+
+## Operational Readiness
+
+_(Operations — optional post-deployment gate. Record service ownership,
+observability, service objectives, reliability review, incident response,
+failure-drill, and post-release outcome evidence from the operational-readiness
+extension.)_
+
+| # | Check | Status | Detail |
+|---|-------|--------|--------|
+| 1 | Health and telemetry | ⬜ | |
+| 2 | Service objectives and alerts | ⬜ | |
+| 3 | Reliability review | ⬜ | |
+| 4 | Staging failure drill | ⬜ | |
+| 5 | Technical and business outcome | ⬜ | |

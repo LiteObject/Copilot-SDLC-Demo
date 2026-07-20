@@ -1,0 +1,51 @@
+name: AI Governance
+
+on:
+    workflow_dispatch:
+        inputs:
+            run_evaluation:
+                description: Run the configured agent evaluation task
+                required: true
+                default: true
+                type: boolean
+    schedule:
+        - cron: "37 4 * * 1"
+
+permissions:
+    contents: read
+
+jobs:
+    ai-governance:
+        name: Validate AI-assisted development governance
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+            - name: Detect AI governance
+              id: ai-governance-config
+              shell: bash
+              run: |
+                  enabled=false
+                  if awk '/^ai_governance:/{found=1; next} found && /^[^[:space:]]/{exit} found && /enabled:[[:space:]]*true/{enabled=1} END { if (enabled) print "true" }' .github/sdlc-config.yml | grep -q true; then
+                    enabled=true
+                  fi
+                  echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+
+            - name: Validate AI governance contract
+              if: steps.ai-governance-config.outputs.enabled == 'true'
+              shell: bash
+              run: bash scripts/validate-ai-governance.sh
+
+            - name: Run agent evaluation
+              if: steps.ai-governance-config.outputs.enabled == 'true' && (github.event_name != 'workflow_dispatch' || inputs.run_evaluation == true)
+              shell: bash
+              run: bash scripts/run-ai-governance.sh --record-spec
+
+            - name: Upload AI governance evidence
+              if: always() && steps.ai-governance-config.outputs.enabled == 'true'
+              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+              with:
+                  name: ai-governance-${{ github.run_id }}
+                  path: .sdlc/evidence/
+                  if-no-files-found: warn

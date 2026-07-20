@@ -166,6 +166,10 @@ if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
     $configText = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $ConfigPath).Path)
     $deploymentReadinessEnabled = $configText -match '(?m)^\s*deployment_readiness_gate:\s*true\s*$'
 }
+$aiGovernanceEnabled = $false
+if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
+    $aiGovernanceEnabled = $configText -match '(?ms)^ai_governance:\s*\r?\n(?:(?!^\S).)*?^\s+enabled:\s*true\s*$'
+}
 
 $timestamp = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
 if (-not $BackupPath) {
@@ -192,6 +196,7 @@ foreach ($line in @(
         "current_phase: $currentPhase",
         "design_required: $($designRequired.ToString().ToLowerInvariant())",
         "deployment_readiness_enabled: $($deploymentReadinessEnabled.ToString().ToLowerInvariant())",
+        "ai_governance_enabled: $($aiGovernanceEnabled.ToString().ToLowerInvariant())",
         'security_gate_enabled: false',
         "review_cycle: $reviewCycle",
         'revision_commit_sha: ""',
@@ -210,7 +215,7 @@ else {
     foreach ($file in $plannedFiles) { [void]$metadataLines.Add("  - $file") }
 }
 [void]$metadataLines.Add('approved_globs: []')
-foreach ($gate in @('requirements', 'config', 'install', 'design', 'planning', 'build', 'security', 'review', 'test', 'lint', 'type_check', 'deployment_readiness')) {
+foreach ($gate in @('requirements', 'config', 'install', 'design', 'planning', 'build', 'security', 'review', 'test', 'lint', 'type_check', 'package', 'deploy', 'sbom', 'smoke_test', 'rollback', 'release', 'deployment_readiness', 'ai_governance')) {
     foreach ($line in @(
             ('gate_' + $gate + '_command: ""'),
             ('gate_' + $gate + '_commit_sha: ""'),

@@ -1,0 +1,32 @@
+name: Phase 3 Release Assurance
+
+on:
+    push:
+    pull_request:
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    bash:
+        name: Bash release bundle validation
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+            - name: Run Phase 3 release tests
+              shell: bash
+              run: bash tests/phase3/run-tests.sh
+
+    powershell:
+        name: PowerShell release bundle validation
+        runs-on: windows-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+            - name: Run Phase 3 release tests
+              shell: pwsh
+              run: ./tests/phase3/run-tests.ps1

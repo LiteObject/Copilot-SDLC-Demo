@@ -47,6 +47,7 @@ Phase-specific standards are in `.github/instructions/`:
 - `scope-audit.instructions.md` — blast-radius checking (declare → implement → verify). Backed by `scripts/scope-audit.ps1` / `scripts/scope-audit.sh`.
 - `frontend-ux.instructions.md` — UX and accessibility rules for UI files when the `frontend` extension is selected.
 - `deployment-readiness.instructions.md` — pre-deployment security and build checklist when the `deployment-readiness` extension is selected.
+- `ai-governance.instructions.md` — least-privilege tools, untrusted-input handling, human approvals, and audit evidence when the `ai-governance` extension is selected.
 
 ## Automation Scripts
 
@@ -55,7 +56,11 @@ Utility scripts in `scripts/` reduce LLM hallucination risk for deterministic ch
 - `migrate-spec.ps1` / `migrate-spec.sh` — explicitly migrates a legacy `docs/spec.md`, creates a backup, and initializes workflow metadata; it never writes without `-Force` / `--force`.
 - `validate-sdlc-config.ps1` / `validate-sdlc-config.sh` — validates schema, package manager/manifest, test directories, named tasks, command availability, and evidence settings; writes config evidence.
 - `run-sdlc-task.ps1` / `run-sdlc-task.sh` — runs structured install/build/test/lint/type-check tasks, retains logs and JSON evidence, and can update `docs/spec.md` gate records.
+- `run-security-scans.ps1` / `run-security-scans.sh` — runs configured security tasks, applies blocking severity policy, writes a machine-readable aggregate, and records `gate_security_*`.
 - `scope-audit.ps1` / `scope-audit.sh` — compares git diff against the Implementation Plan and reports scope creep.
+- `validate-ai-governance.ps1` / `.sh` — validates approved AI providers, models, data boundaries, tools, sandboxes, and evaluation configuration when the `ai-governance` extension is selected.
+- `record-ai-change.ps1` / `.sh` — appends an auditable, approval-aware AI change record.
+- `run-ai-governance.ps1` / `.sh` — runs the configured agent evaluation task and records revision-bound evidence.
 - The scaffold tools remain in the template authoring repository under `tools/`; they are not copied into the target project.
 
 ## CI Integration

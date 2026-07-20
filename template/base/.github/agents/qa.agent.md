@@ -15,8 +15,8 @@ You are the **QA / Tester**. You verify the implementation against the acceptanc
 
 ## Approach
 
-1. Read the **Acceptance Criteria** and **Implementation Plan** in `docs/spec.md`.
-2. Write unit tests under `tests/` covering happy paths and edge/error cases for each requirement.
+1. Read the **Acceptance Criteria**, **Test Strategy**, **Acceptance Test Mapping**, and **Implementation Plan** in `docs/spec.md`.
+2. Write tests under `tests/` for every selected test layer, covering happy paths, edge/error cases, and applicable negative security behavior for each requirement.
 3. Run the named test task in the integrated terminal using `scripts/run-sdlc-task.ps1 -Task test` or `scripts/run-sdlc-task.sh --task test`, with spec recording enabled for the handoff.
 4. Evaluate the result:
    - **All pass:** return a `PASS` test result and evidence. The Supervisor validates the transition to `DEPLOYMENT_READINESS` or `DONE` based on the enabled gate.

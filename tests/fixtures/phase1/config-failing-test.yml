@@ -15,6 +15,14 @@ validation:
   optional_tasks: []
   install_task: none
   evidence_directory: .sdlc/evidence
+quality_security:
+  risk_profile: low
+  required_test_layers: [unit]
+  acceptance_mapping_required: true
+security:
+  review_required: false
+  tasks: []
+  blocking_severities: [critical, high]
 tasks:
   build:
     executable: bash

@@ -74,8 +74,9 @@ work, and why Copilot customization over a backend), see
 The current implementation is a lightweight, human-supervised AI-assisted SDLC
 template. [docs/roadmap.md](docs/roadmap.md) defines the dependency-ordered work
 needed to add enforceable workflow gates, wider quality and security validation,
-release and operational controls, AI-agent governance, and the lifecycle controls
-needed when the product itself uses AI.
+release and operational controls, and lifecycle controls needed when the product
+itself uses AI. Phases 0 through 5 are implemented; Phases 6 and 7 remain
+proposed.
 
 ## Repository layout
 
@@ -93,7 +94,10 @@ Copilot-SDLC-Demo/
 │  └─ extensions/                   <- opt-in target capabilities
 │     ├─ deployment-readiness/
 │     ├─ frontend/
-│     └─ github-actions/
+│     ├─ github-actions/
+│     ├─ release-assurance/
+│     ├─ operational-readiness/
+│     └─ ai-governance/
 ├─ tools/
 │  ├─ scaffold-sdlc.ps1             <- Windows/PowerShell installer
 │  └─ scaffold-sdlc.sh              <- Bash installer
@@ -102,6 +106,10 @@ Copilot-SDLC-Demo/
 │  └─ roadmap.md                    <- future implementation roadmap
 ├─ tests/phase0/                    <- authoring-repository workflow fixtures and harnesses
 ├─ tests/phase1/                    <- config and named-task validation harnesses
+├─ tests/phase2/                    <- quality and security policy harnesses
+├─ tests/phase3/                    <- release assurance harnesses
+├─ tests/phase4/                    <- operational readiness harnesses
+├─ tests/phase5/                    <- AI governance harnesses
 ├─ .github/copilot-instructions.md  <- authoring-repository rules
 ├─ README.md                        <- this file
 └─ LICENSE
@@ -156,6 +164,15 @@ folder:
 
 # Add frontend UX and accessibility guidance
 ./tools/scaffold-sdlc.ps1 -Target ../my-project -Extension frontend
+
+# Add artifact, SBOM, provenance, promotion, smoke-test, and rollback controls
+./tools/scaffold-sdlc.ps1 -Target ../my-project -Extension release-assurance
+
+# Add observability, service objectives, incident, runbook, and feedback controls
+./tools/scaffold-sdlc.ps1 -Target ../my-project -Extension operational-readiness
+
+# Add AI-assisted development governance and audit controls
+./tools/scaffold-sdlc.ps1 -Target ../my-project -Extension ai-governance
 ```
 
 ```bash
@@ -167,6 +184,15 @@ folder:
 
 # Add frontend UX and accessibility guidance
 ./tools/scaffold-sdlc.sh ../my-project --extension frontend
+
+# Add artifact, SBOM, provenance, promotion, smoke-test, and rollback controls
+./tools/scaffold-sdlc.sh ../my-project --extension release-assurance
+
+# Add observability, service objectives, incident, runbook, and feedback controls
+./tools/scaffold-sdlc.sh ../my-project --extension operational-readiness
+
+# Add AI-assisted development governance and audit controls
+./tools/scaffold-sdlc.sh ../my-project --extension ai-governance
 ```
 
 The installers discover files under `template/base` and selected extension
@@ -177,6 +203,25 @@ stop if the two have drifted. On later runs, `-Force` or `--force` refreshes
 only unchanged template-owned files. `.github/sdlc-config.yml` and `docs/spec.md`
 are project-owned after installation and are never overwritten. The installers
 do not create `src/` or `tests/`.
+
+When the `operational-readiness` extension is enabled, configure the service
+owner, on-call route, telemetry, SLIs/SLOs, review documents, runbooks, and
+named operational tasks in `.github/sdlc-config.yml`. Run
+`scripts/validate-operational-readiness.ps1` or `.sh`, then
+`scripts/run-operational-readiness.ps1 -RecordSpec` or
+`scripts/run-operational-readiness.sh --record-spec`. Use the failure-drill
+switch in staging before production promotion, and record the technical and
+business outcome plus any incident review under `.sdlc/evidence/`.
+
+When the `ai-governance` extension is enabled, configure approved providers,
+models, tenants, repositories, data classifications, tools, MCP servers,
+network destinations, credential scopes, phase grants, sandbox requirements,
+and the `agent_evaluation` task in `.github/sdlc-config.yml`. Run
+`scripts/validate-ai-governance.ps1` or `.sh` before agent work. Record every
+agent-mediated change with `record-ai-change.ps1` or `.sh`; restricted actions
+and approved final dispositions require a human approval record. Run
+`scripts/run-ai-governance.ps1 -RecordSpec` or
+`scripts/run-ai-governance.sh --record-spec` before handoff.
 
 ### Use a repository URL with an agent
 
@@ -265,6 +310,19 @@ Run the authoring-repository regression harnesses with:
 The harnesses exercise both validator variants against the same workflow cases,
 including failed gates, stale evidence, CRLF input, review-cycle exhaustion,
 exact scope, invalid directory scope, and approved globs.
+
+Phase 2 adds risk-selected test layers, acceptance-criterion mappings, security
+design review, configurable security task IDs, and machine-readable blocking
+severity evidence. Run `scripts/run-security-scans.ps1 -RecordSpec` or
+`scripts/run-security-scans.sh --record-spec` after configuring the security
+tasks in `.github/sdlc-config.yml`.
+
+For repositories that ship artifacts, install the `release-assurance` extension.
+It adds release configuration validation, artifact checksums, SBOM and
+provenance generation, manifest verification, protected-environment promotion,
+smoke-test gates, and a manual rollback workflow. Configure the extension only
+after setting `release_assurance.enabled: true` and its package/SBOM/deploy/
+smoke/rollback tasks.
 
 ### Migrate an existing project
 

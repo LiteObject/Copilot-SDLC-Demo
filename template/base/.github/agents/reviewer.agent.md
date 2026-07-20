@@ -32,6 +32,9 @@ You are the **Code Reviewer**. You judge the quality of the Developer's implemen
      - Error messages or debug output that could leak internal paths, stack traces, or data.
      - Unsafe deserialization of user-supplied data.
    - **Validation gates** — confirm `scripts/validate-sdlc-config` passed and every configured install/build/lint/type-check gate required before REVIEW has `PASS` evidence for the current revision. Do not accept a pasted command string in place of task evidence.
+   - **Test strategy** — confirm the required test layers are selected in **Test Strategy** and every acceptance criterion has an automated or owned manual mapping with evidence.
+   - **Security design** — when required by risk or configuration, confirm **Security Design Review** is complete before coding and that applicable negative security tests exist.
+   - **Security scans** — run `scripts/run-security-scans.ps1` or `.sh`, verify the machine-readable summary, and block critical/high findings unless a traceable exception is recorded.
    - **Spec fidelity** — every file traces to a plan item; the plan is fully implemented; no scope creep.
    - **Maintainability** — clear names, small functions, business logic separated from I/O, no dead code or leftover TODOs.
 6. Decide:

@@ -57,7 +57,7 @@ function ConvertFrom-ConfigScalar {
         ($trimmed.StartsWith("'") -and $trimmed.EndsWith("'"))) {
         return $trimmed.Substring(1, $trimmed.Length - 2).Replace('\"', '"')
     }
-    return $trimmed
+    return ([regex]::Replace($trimmed, '\s+#.*$', '')).Trim()
 }
 
 function ConvertFrom-InlineList {
@@ -259,7 +259,7 @@ function Set-SpecMetadata {
         for ($index = 0; $index -lt $lines.Count; $index++) {
             if ($lines[$index] -match ('^' + [regex]::Escape($key) + ':')) {
                 $value = [string]$Updates[$key]
-                if ($key -notmatch 'result|exit_code') { $value = '"' + $value.Replace('"', '\"') + '"' }
+                if ($key -notmatch 'result|exit_code|_enabled') { $value = '"' + $value.Replace('"', '\"') + '"' }
                 $lines[$index] = "${key}: $value"
                 $found = $true
                 break
@@ -288,7 +288,9 @@ catch {
 $errors = New-Object System.Collections.Generic.List[string]
 $warnings = New-Object System.Collections.Generic.List[string]
 $allowedPackageManagers = @('npm', 'yarn', 'pnpm', 'pip', 'poetry', 'cargo', 'dotnet', 'go', 'none')
-$allowedTasks = @('install', 'build', 'test', 'lint', 'type_check')
+$allowedTasks = @('install', 'build', 'test', 'lint', 'type_check', 'sast', 'secrets', 'dependency_audit', 'license_audit', 'container_scan', 'iac_scan', 'dast', 'security_tests', 'package', 'sbom', 'sign', 'verify_signature', 'deploy', 'smoke_test', 'rollback', 'health_check', 'telemetry_check', 'failure_drill', 'post_release_check', 'agent_evaluation')
+$allowedTestLayers = @('unit', 'integration', 'contract', 'api', 'e2e', 'accessibility', 'performance', 'resilience', 'fuzz', 'property')
+$allowedSeverities = @('critical', 'high', 'medium', 'low', 'info')
 
 if ((Get-ConfigValue $config 'sdlc_config_schema') -ne '1') {
     Add-ValidationError $errors "sdlc_config_schema must be 1."
@@ -327,21 +329,42 @@ if ($requiredTasks.Count -eq 0) { Add-ValidationError $errors 'validation.requir
 foreach ($requiredTask in @('build', 'test')) {
     if ($requiredTasks -notcontains $requiredTask) { Add-ValidationError $errors "validation.required_tasks must include '$requiredTask'." }
 }
-foreach ($task in @($requiredTasks + $optionalTasks)) {
-    if ($task -notin $allowedTasks -or $task -eq 'install') { Add-ValidationError $errors "Unknown validation task '$task'. Use build, test, lint, or type_check." }
+foreach ($task in @($requiredTasks + $optionalTasks + $securityTasks)) {
+    if ([string]::IsNullOrWhiteSpace([string]$task)) { continue }
+    if ($task -notin $allowedTasks -or $task -eq 'install') { Add-ValidationError $errors "Unknown validation task '$task'." }
 }
 if (($requiredTasks | Where-Object { $optionalTasks -contains $_ }).Count -gt 0) { Add-ValidationError $errors 'A task cannot be both required and optional.' }
 if ($installTask -ne 'none' -and $installTask -notin $allowedTasks) { Add-ValidationError $errors "validation.install_task must be install or none, not '$installTask'." }
 if ($packageManager -eq 'none' -and $installTask -ne 'none') { Add-ValidationError $errors 'validation.install_task must be none when package_manager is none.' }
 if ($packageManager -ne 'none' -and $installTask -eq 'none') { Add-ValidationError $errors 'validation.install_task must be install for a managed package_manager.' }
 
-$allConfiguredTasks = @($requiredTasks + $optionalTasks)
+$riskProfile = Get-ConfigValue $config 'quality_security.risk_profile'
+if ($riskProfile -notin @('low', 'medium', 'high', 'critical')) { Add-ValidationError $errors "quality_security.risk_profile '$riskProfile' must be low, medium, high, or critical." }
+$testLayers = Get-ConfigList $config 'quality_security.required_test_layers'
+if ($testLayers.Count -eq 0) { Add-ValidationError $errors 'quality_security.required_test_layers must contain at least one test layer.' }
+foreach ($layer in $testLayers) { if ($layer -notin $allowedTestLayers) { Add-ValidationError $errors "Unsupported required test layer '$layer'." } }
+$mappingRequired = Get-ConfigValue $config 'quality_security.acceptance_mapping_required'
+if ($mappingRequired -notin @('true', 'false')) { Add-ValidationError $errors 'quality_security.acceptance_mapping_required must be true or false.' }
+$securityReviewRequired = Get-ConfigValue $config 'security.review_required'
+$aiGovernanceEnabled = Get-ConfigValue $config 'ai_governance.enabled' 'false'
+if ($securityReviewRequired -notin @('true', 'false')) { Add-ValidationError $errors 'security.review_required must be true or false.' }
+$securityTasks = @(Get-ConfigList $config 'security.tasks' | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+$blockingSeverities = @(Get-ConfigList $config 'security.blocking_severities' | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+if ($blockingSeverities.Count -eq 0) { Add-ValidationError $errors 'security.blocking_severities must contain at least one severity.' }
+foreach ($severity in $blockingSeverities) { if ($severity -notin $allowedSeverities) { Add-ValidationError $errors "Unsupported blocking severity '$severity'." } }
+foreach ($securityTask in $securityTasks) {
+    if ($securityTask -notin @('sast', 'secrets', 'dependency_audit', 'license_audit', 'container_scan', 'iac_scan', 'dast', 'security_tests')) { Add-ValidationError $errors "Unsupported security task '$securityTask'." }
+}
+if ($securityReviewRequired -eq 'true' -and $securityTasks.Count -eq 0) { [void]$warnings.Add('security.review_required is true but security.tasks is empty; configure at least one scanner or security test task.') }
+
+$allConfiguredTasks = @($requiredTasks + $optionalTasks + $securityTasks)
 if ($installTask -ne 'none') { $allConfiguredTasks += $installTask }
 $taskNames = @($config.Tasks.Keys)
 foreach ($taskName in $taskNames) {
     if ($taskName -notin $allowedTasks) { Add-ValidationError $errors "Unknown task registry entry '$taskName'." }
 }
 foreach ($taskName in $allConfiguredTasks | Select-Object -Unique) {
+    if ([string]::IsNullOrWhiteSpace([string]$taskName)) { continue }
     if (-not $config.Tasks.ContainsKey($taskName)) {
         Add-ValidationError $errors "Task '$taskName' is listed but has no tasks.$taskName record."
         continue
@@ -378,6 +401,10 @@ $record = [ordered]@{
     package_manager = $packageManager
     required_tasks = @($requiredTasks)
     optional_tasks = @($optionalTasks)
+    risk_profile  = $riskProfile
+    required_test_layers = @($testLayers)
+    security_tasks = @($securityTasks)
+    blocking_severities = @($blockingSeverities)
     command       = 'validate-sdlc-config'
     commit_sha    = $commitSha
     tree_digest   = $treeDigest
@@ -402,6 +429,8 @@ if ($RecordSpec) {
         gate_config_result = if ($errors.Count -eq 0) { 'PASS' } else { 'FAIL' }
         gate_config_evidence = $relativeEvidence
     }
+    if ($securityReviewRequired -eq 'true') { $updates['security_gate_enabled'] = 'true' }
+    if ($aiGovernanceEnabled -eq 'true') { $updates['ai_governance_enabled'] = 'true' }
     try { Set-SpecMetadata -Path $SpecPath -Updates $updates; Write-Host "[INFO] Recorded gate_config_* in $SpecPath" }
     catch { Write-Host "[FAIL] Could not record config gate in spec: $($_.Exception.Message)"; $errors.Add($_.Exception.Message) }
 }

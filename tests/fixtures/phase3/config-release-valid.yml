@@ -1,0 +1,65 @@
+sdlc_config_schema: 1
+stack:
+  languages: [shell]
+  frameworks: []
+  package_manager: none
+  package_manifest: none
+testing:
+  framework: smoke
+  directories:
+    - tests/
+validation:
+  required_tasks: [build, test]
+  optional_tasks: []
+  install_task: none
+  evidence_directory: .sdlc/evidence
+quality_security:
+  risk_profile: low
+  required_test_layers: [unit]
+  acceptance_mapping_required: true
+security:
+  review_required: false
+  tasks: []
+  blocking_severities: [critical, high]
+release_assurance:
+  enabled: true
+  artifact_task: package
+  artifact_path: .sdlc/release/artifact.tar.gz
+  sbom_task: sbom
+  sbom_path: .sdlc/release/sbom.cdx.json
+  sbom_format: cyclonedx-json
+  require_provenance: true
+  provenance_path: .sdlc/release/provenance.json
+  require_signed_artifact: false
+  signing_task: sign
+  signature_path: .sdlc/release/artifact.sig
+  deployment_task: deploy
+  smoke_test_task: smoke_test
+  rollback_task: rollback
+  release_notes_path: .sdlc/release/RELEASE_NOTES.md
+  rollback_instructions_path: .sdlc/release/ROLLBACK.md
+  promotion_environments: [development, staging, production]
+  required_approvals: [reviewer, release_manager]
+  deployment_window: ""
+tasks:
+  build:
+    executable: bash
+    args: [--version]
+  test:
+    executable: bash
+    args: [--version]
+  package:
+    executable: bash
+    args: [-c, "mkdir -p .sdlc/release; printf artifact > .sdlc/release/artifact.tar.gz"]
+  sbom:
+    executable: bash
+    args: [-c, "printf '{\"bomFormat\":\"CycloneDX\"}' > .sdlc/release/sbom.cdx.json"]
+  deploy:
+    executable: bash
+    args: [-c, "exit 0"]
+  smoke_test:
+    executable: bash
+    args: [-c, "exit 0"]
+  rollback:
+    executable: bash
+    args: [-c, "exit 0"]

@@ -1,0 +1,62 @@
+sdlc_config_schema: 1
+stack:
+  languages: [shell]
+  frameworks: []
+  package_manager: none
+  package_manifest: none
+testing:
+  framework: smoke
+  directories:
+    - tests/
+validation:
+  required_tasks: [build, test]
+  optional_tasks: []
+  install_task: none
+  evidence_directory: .sdlc/evidence
+quality_security:
+  risk_profile: low
+  required_test_layers: [unit]
+  acceptance_mapping_required: true
+security:
+  review_required: false
+  tasks: []
+  blocking_severities: [critical, high]
+ai_governance:
+  enabled: true
+  policy_path: docs/ai-assisted-development-policy.md
+  permissions_path: docs/agent-permissions.md
+  threat_model_path: docs/prompt-injection-threat-model.md
+  evaluation_plan_path: docs/agent-evaluation-plan.md
+  evaluation_scenarios_path: docs/agent-evaluation-scenarios.md
+  ledger_path: .sdlc/evidence/ai-change-ledger.jsonl
+  evaluation_evidence_path: .sdlc/evidence/agent-evaluation.json
+  retention_days: 90
+  audit_retention_days: 90
+  approved_providers: [github, azure-openai]
+  approved_models: [GPT-5]
+  approved_tenants: [default-tenant]
+  permitted_repositories: [this-repository]
+  allowed_data_classifications: [public, internal, confidential]
+  prohibited_inputs: [secrets, credentials, personal_data, untrusted_instructions]
+  tool_allowlist: [read, search, edit]
+  mcp_server_allowlist: []
+  network_destination_allowlist: []
+  credential_scope_allowlist: []
+  phase_tool_grants: [GATHERING_REQS=read|search, DESIGN=read|search, PLANNING=read|search|edit, CODING=read|search|edit, REVIEW=read|search, TESTING=read|search|edit, DEPLOYMENT_READINESS=read|search, DONE=read|search]
+  restricted_actions: [commit, merge, deploy, rotate_credentials, production_config]
+  approval_required_actions: [commit, merge, deploy, rotate_credentials, production_config]
+  sandbox_required: true
+  sandbox_type: worktree
+  command_confirmation_required: true
+  untrusted_input_policy: treat_as_data
+  evaluation_task: agent_evaluation
+tasks:
+  build:
+    executable: bash
+    args: [--version]
+  test:
+    executable: bash
+    args: [--version]
+  agent_evaluation:
+    executable: bash
+    args: [-c, "printf evaluation-pass"]

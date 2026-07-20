@@ -12,6 +12,14 @@ validation:
   required_tasks: [build]
   optional_tasks: []
   install_task: install
+quality_security:
+  risk_profile: low
+  required_test_layers: [unit]
+  acceptance_mapping_required: true
+security:
+  review_required: false
+  tasks: []
+  blocking_severities: [critical, high]
 tasks:
   build:
     executable: bash

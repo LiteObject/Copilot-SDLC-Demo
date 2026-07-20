@@ -77,6 +77,7 @@ done
 
 if [[ -z "$CONFIG_PATH" ]]; then CONFIG_PATH="$REPO_ROOT/.github/sdlc-config.yml"; fi
 if [[ -z "$SPEC_PATH" ]]; then SPEC_PATH="$REPO_ROOT/docs/spec.md"; fi
+REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
 if [[ ! -f "$CONFIG_PATH" ]]; then echo "[FAIL] Config file not found: $CONFIG_PATH"; exit 1; fi
 
 trim_value() {
@@ -93,6 +94,8 @@ unquote_value() {
         value="${value//\\\"/\"}"
     elif [[ ${#value} -ge 2 && "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
         value="${value:1:${#value}-2}"
+    else
+        value="$(printf '%s' "$value" | sed -E 's/[[:space:]]+#.*$//')"
     fi
     printf '%s' "$value"
 }
@@ -201,6 +204,7 @@ if [[ "$TASK" == 'all' ]]; then
     [[ -z "$install_task" || "$install_task" == 'none' ]] || TASK_NAMES+=("$install_task")
     get_list validation.required_tasks; TASK_NAMES+=("${LIST_RESULT[@]}")
     get_list validation.optional_tasks; TASK_NAMES+=("${LIST_RESULT[@]}")
+    get_list security.tasks; TASK_NAMES+=("${LIST_RESULT[@]}")
 else
     TASK_NAMES=("$TASK")
 fi

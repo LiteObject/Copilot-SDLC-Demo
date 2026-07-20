@@ -1,0 +1,69 @@
+sdlc_config_schema: 1
+stack:
+  languages: [shell]
+  frameworks: []
+  package_manager: none
+  package_manifest: none
+testing:
+  framework: smoke
+  directories:
+    - tests/
+validation:
+  required_tasks: [build, test]
+  optional_tasks: []
+  install_task: none
+  evidence_directory: .sdlc/evidence
+quality_security:
+  risk_profile: low
+  required_test_layers: [unit]
+  acceptance_mapping_required: true
+security:
+  review_required: false
+  tasks: []
+  blocking_severities: [critical, high]
+operational_readiness:
+  enabled: true
+  service_name: demo-api
+  service_owner: platform-team
+  on_call: platform-oncall
+  health_endpoint: /health
+  required_telemetry: [structured_logs, metrics, distributed_traces, correlation_ids]
+  required_slis: [availability, latency, error_rate, throughput, business_outcome]
+  slo_availability: 99.9%
+  slo_latency: p95 < 500ms
+  slo_error_rate: < 1%
+  slo_throughput: 100 requests per second
+  slo_business_outcome: 98% successful checkout completion
+  readiness_review_items: [capacity, backup_recovery, dependency_failure, data_retention, privacy, disaster_recovery]
+  incident_severities: [sev1, sev2, sev3, sev4]
+  retention_days: 30
+  readiness_review_path: docs/operational-readiness.md
+  incident_response_path: docs/incident-response.md
+  alert_policy_path: docs/alert-policy.md
+  escalation_policy_path: docs/escalation-policy.md
+  runbooks: [docs/runbooks/high-error-rate.md, docs/runbooks/degraded-dependency.md, docs/runbooks/rollback.md, docs/runbooks/secret-rotation.md, docs/runbooks/feature-disablement.md]
+  feedback_path: .sdlc/evidence/production-outcome.json
+  incident_record_path: .sdlc/evidence/incident-review.json
+  health_check_task: health_check
+  telemetry_check_task: telemetry_check
+  failure_drill_task: failure_drill
+  post_release_check_task: post_release_check
+tasks:
+  build:
+    executable: bash
+    args: [--version]
+  test:
+    executable: bash
+    args: [--version]
+  health_check:
+    executable: bash
+    args: [-c, "exit 0"]
+  telemetry_check:
+    executable: bash
+    args: [-c, "exit 0"]
+  failure_drill:
+    executable: bash
+    args: [-c, "exit 0"]
+  post_release_check:
+    executable: bash
+    args: [-c, "exit 0"]
