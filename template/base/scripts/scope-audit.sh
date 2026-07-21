@@ -15,13 +15,16 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/feature-context.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SPEC_PATH=""
+FEATURE_ID=""
+SPEC_RELATIVE_PATH='docs/spec.md'
 BASE_REF='HEAD'
 
 usage() {
     cat <<'EOF'
-Usage: ./scripts/scope-audit.sh [BASE_REF] [--spec-path PATH] [--repo-root PATH]
+Usage: ./scripts/scope-audit.sh [BASE_REF] [--feature-id ID] [--spec-path PATH] [--repo-root PATH]
 EOF
 }
 
@@ -30,6 +33,11 @@ while (($# > 0)); do
         --spec-path)
             [[ $# -ge 2 ]] || { echo '[ERROR] --spec-path requires a value.'; exit 2; }
             SPEC_PATH="$2"
+            shift 2
+            ;;
+        --feature-id)
+            [[ $# -ge 2 ]] || { echo '[ERROR] --feature-id requires a value.'; exit 2; }
+            FEATURE_ID="$2"
             shift 2
             ;;
         --repo-root)
@@ -62,9 +70,7 @@ while (($# > 0)); do
     esac
 done
 
-if [[ -z "$SPEC_PATH" ]]; then
-    SPEC_PATH="$REPO_ROOT/docs/spec.md"
-fi
+if ! resolve_feature_context "$REPO_ROOT" "$SPEC_PATH" "$FEATURE_ID" ''; then exit 2; fi
 if [[ ! -f "$SPEC_PATH" ]]; then
     echo "[ERROR] docs/spec.md not found at: $SPEC_PATH"
     exit 2
@@ -139,6 +145,20 @@ done <<< "$FRONT_MATTER"
 meta_get() {
     printf '%s' "${META[$1]-}"
 }
+
+if [[ -n "$FEATURE_ID" ]]; then
+    declared_feature_id="$(meta_get feature_id)"
+    declared_spec_path="${META[spec_path]-}"
+    declared_spec_path="${declared_spec_path//\\//}"
+    if [[ "$declared_feature_id" != "$FEATURE_ID" ]]; then
+        echo "[ERROR] Spec feature_id '$declared_feature_id' does not match requested feature '$FEATURE_ID'."
+        exit 2
+    fi
+    if [[ "$declared_spec_path" != "$SPEC_RELATIVE_PATH" ]]; then
+        echo "[ERROR] Spec spec_path '$declared_spec_path' does not match '$SPEC_RELATIVE_PATH'."
+        exit 2
+    fi
+fi
 
 for key in sdlc_schema planned_files approved_globs; do
     if [[ -z "${META[$key]+present}" ]]; then
@@ -238,6 +258,7 @@ for raw_path in "${PLANNED_FILES[@]}"; do
 done
 
 echo '=== Scope Audit ==='
+[[ -n "$FEATURE_ID" ]] && echo "Feature: $FEATURE_ID"
 echo "Planned files: ${#PLAN_PATTERNS[@]}"
 echo "Base ref: $BASE_REF"
 echo
@@ -279,7 +300,15 @@ declare -a SCOPE_CREEP=()
 
 for file in "${CHANGED_FILES[@]}"; do
     file="$(normalize_path "$file")"
-    if [[ "$file" == 'docs/spec.md' || "$file" == '.sdlc' || "$file" == .sdlc/* ]]; then
+    is_feature_workflow=0
+    if [[ -n "$FEATURE_ID" && ( "$file" == "$SPEC_RELATIVE_PATH" || "$file" == ".sdlc/evidence/$FEATURE_ID" || "$file" == ".sdlc/evidence/$FEATURE_ID"/* ) ]]; then
+        is_feature_workflow=1
+    fi
+    is_legacy_workflow=0
+    if [[ -z "$FEATURE_ID" && ( "$file" == 'docs/spec.md' || "$file" == '.sdlc' || "$file" == .sdlc/* ) ]]; then
+        is_legacy_workflow=1
+    fi
+    if (( is_feature_workflow == 1 || is_legacy_workflow == 1 )); then
         WORKFLOW_CHANGES+=("$file")
         continue
     fi

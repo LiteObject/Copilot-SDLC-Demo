@@ -8,23 +8,30 @@ param(
     [string] $RepoRoot,
     [string] $SpecPath,
     [string] $EvidenceDirectory,
+    [string] $FeatureId,
     [switch] $RecordSpec
 )
 
 $ErrorActionPreference = 'Stop'
+$featureContextPath = Join-Path $PSScriptRoot 'feature-context.ps1'
+if (-not (Test-Path -LiteralPath $featureContextPath -PathType Leaf)) { $featureContextPath = Join-Path $PSScriptRoot '../../../base/scripts/feature-context.ps1' }
+. $featureContextPath
 if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
 if (-not $ConfigPath) { $ConfigPath = Join-Path $RepoRoot '.github/sdlc-config.yml' }
-if (-not $SpecPath) { $SpecPath = Join-Path $RepoRoot 'docs/spec.md' }
-if (-not $EvidenceDirectory) { $EvidenceDirectory = '.sdlc/evidence' }
+$workflowContext = Resolve-FeatureContext -RepoRoot $RepoRoot -SpecPath $SpecPath -FeatureId $FeatureId -EvidenceDirectory $EvidenceDirectory
+$FeatureId = $workflowContext.FeatureId
+$SpecPath = $workflowContext.SpecPath
+$specRelativePath = $workflowContext.SpecRelativePath
+$EvidenceDirectory = if ($FeatureId) { $workflowContext.EvidenceDirectory } elseif ($EvidenceDirectory) { $EvidenceDirectory } else { '.sdlc/evidence' }
 
 function Get-ReleaseBody { param([string] $Content); $match = [regex]::Match($Content, '(?ms)^release_assurance:\s*\r?\n(?<body>.*?)(?=^\S|\z)'); if ($match.Success) { return $match.Groups['body'].Value }; return $null }
 function Get-ReleaseValue { param([string] $Body, [string] $Name, [string] $Default = ''); if ($null -eq $Body) { return $Default }; $match = [regex]::Match($Body, '(?m)^\s*' + [regex]::Escape($Name) + ':\s*(?<value>[^\r\n#]+)'); if (-not $match.Success) { return $Default }; return $match.Groups['value'].Value.Trim().Trim('"', "'") }
 function Get-ReleaseList { param([string] $Body, [string] $Name); $value = Get-ReleaseValue $Body $Name; if (-not $value.StartsWith('[')) { return @() }; return @($value.Trim('[', ']') -split ',' | ForEach-Object { $_.Trim().Trim('"', "'") } | Where-Object { $_ }) }
 function Get-GitValue { param([string] $Root, [string[]] $Arguments); Push-Location $Root; try { $value = (& git @Arguments 2>$null | Out-String).Trim(); if ($LASTEXITCODE -eq 0 -and $value) { return $value }; return 'unknown' } finally { Pop-Location } }
-function Get-TreeDigest { param([string] $Root); $payload = Get-GitValue -Root $Root -Arguments @('diff','--binary','HEAD','--','.',':(exclude)docs/spec.md',':(exclude).sdlc/**'); $sha = [System.Security.Cryptography.SHA256]::Create(); try { return (($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($payload)) | ForEach-Object { $_.ToString('x2') }) -join '') } finally { $sha.Dispose() } }
+function Get-TreeDigest { param([string] $Root, [string] $SpecRelativePath); $payload = Get-GitValue -Root $Root -Arguments @('diff','--binary','HEAD','--','.',":(exclude)$SpecRelativePath",':(exclude).sdlc/**'); $sha = [System.Security.Cryptography.SHA256]::Create(); try { return (($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($payload)) | ForEach-Object { $_.ToString('x2') }) -join '') } finally { $sha.Dispose() } }
 function Get-Sha256 { param([string] $Path); return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function Set-SpecMetadata { param([string] $Path, [hashtable] $Updates); if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Spec file not found: $Path" }; $content = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $Path).Path); $lines = @(Get-Content -LiteralPath $Path); foreach ($key in $Updates.Keys) { $found = $false; for ($index=0; $index -lt $lines.Count; $index++) { if ($lines[$index] -match ('^' + [regex]::Escape($key) + ':')) { $value = [string]$Updates[$key]; if ($key -notmatch 'result|exit_code') { $value = '"' + $value.Replace('"','\"') + '"' }; $lines[$index] = "${key}: $value"; $found = $true; break } }; if (-not $found) { throw "Spec metadata field '$key' was not found." } }; $newline = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }; [System.IO.File]::WriteAllText($Path, ($lines -join $newline), (New-Object System.Text.UTF8Encoding($false))) }
-function Invoke-ConfiguredTask { param([string] $TaskName, [string] $Runner); $arguments = @('-Task',$TaskName,'-RepoRoot',$RepoRoot,'-EvidenceDirectory',$EvidenceDirectory); if ($RecordSpec) { $arguments += @('-SpecPath',$SpecPath,'-RecordSpec') }; & pwsh -NoProfile -ExecutionPolicy Bypass -File $Runner @arguments; if ($LASTEXITCODE -ne 0) { throw "Task '$TaskName' failed with exit code $LASTEXITCODE." } }
+function Invoke-ConfiguredTask { param([string] $TaskName, [string] $Runner); $arguments = @('-Task',$TaskName,'-RepoRoot',$RepoRoot,'-EvidenceDirectory',$EvidenceDirectory); if ($FeatureId) { $arguments += @('-FeatureId',$FeatureId) }; if ($RecordSpec) { $arguments += @('-SpecPath',$SpecPath,'-RecordSpec') }; & pwsh -NoProfile -ExecutionPolicy Bypass -File $Runner @arguments; if ($LASTEXITCODE -ne 0) { throw "Task '$TaskName' failed with exit code $LASTEXITCODE." } }
 
 if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { Write-Host "[FAIL] Config not found: $ConfigPath"; exit 1 }
 $content = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $ConfigPath).Path)
@@ -56,7 +63,7 @@ if (-not (Test-Path -LiteralPath $releaseNotesPath -PathType Leaf)) { throw "Rel
 if (-not (Test-Path -LiteralPath $rollbackPath -PathType Leaf)) { throw "Rollback instructions are required: $rollbackPath" }
 
 $commitSha = Get-GitValue -Root $RepoRoot -Arguments @('rev-parse','HEAD')
-$treeDigest = Get-TreeDigest -Root $RepoRoot
+$treeDigest = Get-TreeDigest -Root $RepoRoot -SpecRelativePath $specRelativePath
 $artifactRelative = $artifactPath.Substring(((Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd([char[]]@('\','/')) + [System.IO.Path]::DirectorySeparatorChar).Length) -replace '\\','/'
 $sbomRelative = $sbomPath.Substring(((Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd([char[]]@('\','/')) + [System.IO.Path]::DirectorySeparatorChar).Length) -replace '\\','/'
 $artifactDigest = Get-Sha256 $artifactPath
@@ -72,9 +79,17 @@ $provenance = [ordered]@{
     }
 }
 $provenance | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $provenancePath -Encoding utf8
-$manifest = [ordered]@{ schema = 1; kind = 'sdlc-release-manifest'; version = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { $commitSha.Substring(0, [Math]::Min(12, $commitSha.Length)) }; source_commit_sha = $commitSha; source_tree_digest = $treeDigest; created_at = $timestamp; artifact = [ordered]@{ path = $artifactRelative; sha256 = $artifactDigest; bytes = (Get-Item -LiteralPath $artifactPath).Length }; sbom = [ordered]@{ path = $sbomRelative; sha256 = $sbomDigest; format = $format }; provenance = [ordered]@{ path = $provenancePath.Substring(((Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd([char[]]@('\','/')) + [System.IO.Path]::DirectorySeparatorChar).Length) -replace '\\','/' }; signature = if ($requireSignature -eq 'true') { $signaturePath.Substring(((Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd([char[]]@('\','/')) + [System.IO.Path]::DirectorySeparatorChar).Length) -replace '\\','/' } else { $null }; promotion_environments = @(Get-ReleaseList $body 'promotion_environments'); required_approvals = @(Get-ReleaseList $body 'required_approvals') }
+$manifest = [ordered]@{ schema = 1; kind = 'sdlc-release-manifest'; version = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { $commitSha.Substring(0, [Math]::Min(12, $commitSha.Length)) }; feature_id = $FeatureId; spec_path = $specRelativePath; source_commit_sha = $commitSha; source_tree_digest = $treeDigest; created_at = $timestamp; artifact = [ordered]@{ path = $artifactRelative; sha256 = $artifactDigest; bytes = (Get-Item -LiteralPath $artifactPath).Length }; sbom = [ordered]@{ path = $sbomRelative; sha256 = $sbomDigest; format = $format }; provenance = [ordered]@{ path = $provenancePath.Substring(((Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd([char[]]@('\','/')) + [System.IO.Path]::DirectorySeparatorChar).Length) -replace '\\','/' }; signature = if ($requireSignature -eq 'true') { $signaturePath.Substring(((Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd([char[]]@('\','/')) + [System.IO.Path]::DirectorySeparatorChar).Length) -replace '\\','/' } else { $null }; promotion_environments = @(Get-ReleaseList $body 'promotion_environments'); required_approvals = @(Get-ReleaseList $body 'required_approvals') }
 $manifestPath = Join-Path $releaseDirectory 'release-manifest.json'
 $manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $manifestPath -Encoding utf8
-if ($RecordSpec) { $relativeEvidence = $manifestPath.Substring(((Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd([char[]]@('\','/')) + [System.IO.Path]::DirectorySeparatorChar).Length) -replace '\\','/'; Set-SpecMetadata -Path $SpecPath -Updates @{ gate_release_command = 'scripts/prepare-release.ps1'; gate_release_commit_sha = $commitSha; gate_release_tree_digest = $treeDigest; gate_release_timestamp = $timestamp; gate_release_exit_code = '0'; gate_release_result = 'PASS'; gate_release_evidence = $relativeEvidence } }
+if ($RecordSpec) {
+    $relativeEvidence = $manifestPath.Substring(((Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd([char[]]@('\','/')) + [System.IO.Path]::DirectorySeparatorChar).Length) -replace '\\','/'
+    $updates = @{ gate_release_command = 'scripts/prepare-release.ps1'; gate_release_commit_sha = $commitSha; gate_release_tree_digest = $treeDigest; gate_release_timestamp = $timestamp; gate_release_exit_code = '0'; gate_release_result = 'PASS'; gate_release_evidence = $relativeEvidence }
+    if ($FeatureId) {
+        $updates['gate_release_feature_id'] = $FeatureId
+        $updates['gate_release_spec_path'] = $specRelativePath
+    }
+    Set-SpecMetadata -Path $SpecPath -Updates $updates
+}
 Write-Host "[PASS] Release prepared: $manifestPath"
 exit 0

@@ -63,6 +63,34 @@ tree digest, timestamps, exit code, result, and log path. With `--record-spec` o
 `-RecordSpec`, the runner also updates the matching `gate_<task>_*` fields in
 `docs/spec.md`.
 
+## Feature-Scoped Workflows
+
+Use a normalized lowercase feature ID such as `checkout-flow` when unrelated
+features must progress concurrently. The canonical spec is
+`docs/specs/checkout-flow/spec.md`, and evidence is stored below
+`.sdlc/evidence/checkout-flow/`. The same ID must be passed to every command:
+
+```powershell
+scripts/check-phase.ps1 -FeatureId checkout-flow -Phase PLANNING
+scripts/scope-audit.ps1 -FeatureId checkout-flow
+scripts/run-sdlc-task.ps1 -Task test -FeatureId checkout-flow -RecordSpec
+```
+
+```bash
+scripts/check-phase.sh PLANNING --feature-id checkout-flow
+scripts/scope-audit.sh --feature-id checkout-flow
+scripts/run-sdlc-task.sh --task test --feature-id checkout-flow --record-spec
+```
+
+PowerShell and Bash reject empty, absolute, traversal, uppercase, underscore,
+and repeated-hyphen IDs. A feature command cannot accept a gate or evidence
+record from another feature. Existing adopters that omit the feature argument
+continue to use `docs/spec.md` and the configured legacy evidence directory.
+To migrate without overwriting the legacy spec, use
+`migrate-spec.ps1 -FeatureId checkout-flow -Force` or
+`migrate-spec.sh --feature-id checkout-flow --force`; the legacy source remains
+in place and a backup is retained under `.sdlc/migrations/checkout-flow/`.
+
 ## Release Assurance
 
 For deployable repositories, install the `release-assurance` extension and set

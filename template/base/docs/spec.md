@@ -1,5 +1,7 @@
 ---
 sdlc_schema: 1
+feature_id: ""
+spec_path: "docs/spec.md"
 current_phase: GATHERING_REQS
 design_required: false
 deployment_readiness_enabled: false
@@ -200,6 +202,58 @@ gate_measurement_timestamp: ""
 gate_measurement_exit_code: ""
 gate_measurement_result: NOT_RUN
 gate_measurement_evidence: ""
+gate_requirements_feature_id: ""
+gate_requirements_spec_path: ""
+gate_config_feature_id: ""
+gate_config_spec_path: ""
+gate_install_feature_id: ""
+gate_install_spec_path: ""
+gate_design_feature_id: ""
+gate_design_spec_path: ""
+gate_planning_feature_id: ""
+gate_planning_spec_path: ""
+gate_build_feature_id: ""
+gate_build_spec_path: ""
+gate_security_feature_id: ""
+gate_security_spec_path: ""
+gate_review_feature_id: ""
+gate_review_spec_path: ""
+gate_test_feature_id: ""
+gate_test_spec_path: ""
+gate_lint_feature_id: ""
+gate_lint_spec_path: ""
+gate_type_check_feature_id: ""
+gate_type_check_spec_path: ""
+gate_package_feature_id: ""
+gate_package_spec_path: ""
+gate_deploy_feature_id: ""
+gate_deploy_spec_path: ""
+gate_sbom_feature_id: ""
+gate_sbom_spec_path: ""
+gate_release_feature_id: ""
+gate_release_spec_path: ""
+gate_smoke_test_feature_id: ""
+gate_smoke_test_spec_path: ""
+gate_rollback_feature_id: ""
+gate_rollback_spec_path: ""
+gate_deployment_readiness_feature_id: ""
+gate_deployment_readiness_spec_path: ""
+gate_health_check_feature_id: ""
+gate_health_check_spec_path: ""
+gate_telemetry_check_feature_id: ""
+gate_telemetry_check_spec_path: ""
+gate_failure_drill_feature_id: ""
+gate_failure_drill_spec_path: ""
+gate_post_release_check_feature_id: ""
+gate_post_release_check_spec_path: ""
+gate_operational_readiness_feature_id: ""
+gate_operational_readiness_spec_path: ""
+gate_ai_governance_feature_id: ""
+gate_ai_governance_spec_path: ""
+gate_ai_lifecycle_feature_id: ""
+gate_ai_lifecycle_spec_path: ""
+gate_measurement_feature_id: ""
+gate_measurement_spec_path: ""
 ---
 
 # Project Spec
@@ -211,6 +265,9 @@ The YAML front matter is the authoritative workflow record. Keep the visible
 `review_cycle`. Only the Supervisor applies state transitions after the phase
 validator passes. Gate records use `PASS`, `FAIL`, or `CHANGES_REQUESTED` and
 must include the command, revision, timestamp, exit code, and evidence path.
+For feature-scoped work, `feature_id` and `spec_path` identify the canonical
+`docs/specs/<feature-id>/spec.md`; every used gate records the same feature
+context and stores evidence under `.sdlc/evidence/<feature-id>/`.
 `planned_files` contains exact repository-relative files; directory entries are
 invalid. A glob requires a matching `approved_globs` record in the form
 `pattern|justification|approver|revision_commit_sha|timestamp`.

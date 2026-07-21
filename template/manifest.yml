@@ -17,6 +17,8 @@ base:
     - docs/spec.md
     - scripts/check-phase.ps1
     - scripts/check-phase.sh
+    - scripts/feature-context.ps1
+    - scripts/feature-context.sh
     - scripts/migrate-spec.ps1
     - scripts/migrate-spec.sh
     - scripts/validate-sdlc-config.ps1
@@ -73,6 +75,8 @@ ownership:
     - scripts/run-security-scans.sh
     - scripts/scope-audit.ps1
     - scripts/scope-audit.sh
+    - scripts/feature-context.ps1
+    - scripts/feature-context.sh
   project_owned:
     - .github/sdlc-config.yml
     - docs/spec.md

@@ -16,6 +16,10 @@
 .PARAMETER SpecPath
     Path to the spec file. Defaults to docs/spec.md in the repository root.
 
+.PARAMETER FeatureId
+    Normalized feature identifier. Resolves the spec to
+    docs/specs/<feature-id>/spec.md.
+
 .PARAMETER RepoRoot
     Repository root used for Git operations and relative paths.
 
@@ -26,18 +30,22 @@
 [CmdletBinding()]
 param(
     [string] $SpecPath,
+    [string] $FeatureId,
     [string] $RepoRoot,
     [string] $BaseRef = 'HEAD'
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'feature-context.ps1')
 
 if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
-if (-not $SpecPath) {
-    $SpecPath = Join-Path $RepoRoot 'docs/spec.md'
-}
+
+$workflowContext = Resolve-FeatureContext -RepoRoot $RepoRoot -SpecPath $SpecPath -FeatureId $FeatureId
+$FeatureId = $workflowContext.FeatureId
+$SpecPath = $workflowContext.SpecPath
+$SpecRelativePath = $workflowContext.SpecRelativePath
 
 function ConvertFrom-YamlScalar {
     param([string] $Value)
@@ -190,6 +198,19 @@ catch {
     exit 2
 }
 
+if ($FeatureId) {
+    $declaredFeatureId = if ($metadata.Values.ContainsKey('feature_id')) { [string]$metadata.Values['feature_id'] } else { '' }
+    $declaredSpecPath = if ($metadata.Values.ContainsKey('spec_path')) { ([string]$metadata.Values['spec_path']) -replace '\\', '/' } else { '' }
+    if ($declaredFeatureId -ne $FeatureId) {
+        Write-Host "[ERROR] Spec feature_id '$declaredFeatureId' does not match requested feature '$FeatureId'."
+        exit 2
+    }
+    if ($declaredSpecPath -ne $SpecRelativePath) {
+        Write-Host "[ERROR] Spec spec_path '$declaredSpecPath' does not match '$SpecRelativePath'."
+        exit 2
+    }
+}
+
 if (-not $metadata.Values.ContainsKey('sdlc_schema') -or $metadata.Values['sdlc_schema'] -ne '1') {
     Write-Host "[ERROR] Unsupported or missing sdlc_schema. Expected '1'."
     exit 2
@@ -232,6 +253,7 @@ foreach ($rawPath in $metadata.PlannedFiles) {
 }
 
 Write-Host '=== Scope Audit ==='
+if ($FeatureId) { Write-Host "Feature: $FeatureId" }
 Write-Host "Planned files: $($plannedEntries.Count)"
 Write-Host "Base ref: $BaseRef"
 Write-Host ''
@@ -256,13 +278,20 @@ else {
     Write-Host ''
 }
 
-$workflowFiles = @('docs/spec.md')
+$workflowFiles = if ($FeatureId) {
+    @($SpecRelativePath, ".sdlc/evidence/$FeatureId")
+}
+else {
+    @('docs/spec.md')
+}
 $workflowChanges = New-Object System.Collections.Generic.List[string]
 $inScope = New-Object System.Collections.Generic.List[string]
 $scopeCreep = New-Object System.Collections.Generic.List[string]
 
 foreach ($file in $changedFiles) {
-    if (($workflowFiles -contains $file) -or $file -eq '.sdlc' -or $file.StartsWith('.sdlc/')) {
+    $isFeatureWorkflowFile = $FeatureId -and (($workflowFiles[0] -eq $file) -or $file -eq $workflowFiles[1] -or $file.StartsWith("$($workflowFiles[1])/"))
+    $isLegacyWorkflowFile = -not $FeatureId -and (($workflowFiles -contains $file) -or $file -eq '.sdlc' -or $file.StartsWith('.sdlc/'))
+    if ($isFeatureWorkflowFile -or $isLegacyWorkflowFile) {
         [void]$workflowChanges.Add($file)
         continue
     }

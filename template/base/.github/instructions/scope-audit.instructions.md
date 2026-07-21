@@ -9,6 +9,12 @@ machine-readable `planned_files` list in the YAML front matter of
 `docs/spec.md` is authoritative. The visible File Structure section is useful
 for people but is not the scope input to the audit script.
 
+For feature-scoped work, the authoritative file is
+`docs/specs/<feature-id>/spec.md`. Resolve the feature before reading the plan
+and run the audit with `--feature-id <feature-id>` or `-FeatureId <feature-id>`.
+The audit excludes only that feature's spec and evidence namespace; another
+feature's spec is a changed product file and is reported as scope creep.
+
 ## When to Use
 
 - Before the Developer starts implementing (declare allowed scope).
@@ -51,6 +57,12 @@ The Reviewer runs the scope-audit script, which compares the actual git diff aga
 
 # Or on Windows:
 ./scripts/scope-audit.ps1
+
+# Check one feature on Windows:
+./scripts/scope-audit.ps1 -FeatureId checkout-flow
+
+# Check one feature on Bash:
+./scripts/scope-audit.sh --feature-id checkout-flow
 
 # Check a branch against main:
 ./scripts/scope-audit.sh origin/main

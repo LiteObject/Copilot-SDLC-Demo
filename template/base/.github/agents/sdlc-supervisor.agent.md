@@ -36,6 +36,16 @@ Before applying any transition, run `scripts/check-phase.ps1` on Windows or
 `scripts/check-phase.sh` elsewhere with the target phase. A worker result is
 not a transition and must not change the state file's workflow metadata.
 
+### Feature Context
+
+For new or parallel work, select a normalized feature ID from the user's
+request, branch/worktree context, or an explicit `-FeatureId` / `--feature-id`
+argument before reading workflow state. Feature mode uses
+`docs/specs/<feature-id>/spec.md` and `.sdlc/evidence/<feature-id>/`; pass the
+same feature argument to phase checks, scope audits, task runners, security
+scans, migrations, and enabled extension runners. Never use a global active-
+feature file. With no feature ID, preserve legacy `docs/spec.md` behavior.
+
 Deployment readiness is conditional. A project or feature that does not use
 deployment or CI/CD may keep `deployment_readiness_enabled: false` and use the
 direct `TESTING -> DONE` path. When an extension is enabled, its gate is still
@@ -66,9 +76,9 @@ If drift is detected during `CODING`, the Developer reconciles it before writing
 
 ## Approach
 
-1. Read `docs/spec.md` and `.github/sdlc-config.yml` to determine the current phase, enabled optional gates, and stack-specific settings. If `docs/spec.md` doesn't exist, start at `GATHERING_REQS`. If it exists without `sdlc_schema: 1`, stop and request an explicit legacy migration using `scripts/migrate-spec.ps1 -Force` or `scripts/migrate-spec.sh --force` before continuing. Run the config validator before delegating implementation.
+1. Resolve the feature spec first when a feature context is present, then read that spec and `.github/sdlc-config.yml` to determine the current phase, enabled optional gates, and stack-specific settings. If the selected spec doesn't exist, start it at `GATHERING_REQS`; if a legacy spec exists without `sdlc_schema: 1`, request an explicit migration using `scripts/migrate-spec.ps1 -FeatureId <id> -Force` or `scripts/migrate-spec.sh --feature-id <id> --force` before continuing. Run the config validator before delegating implementation.
 2. Maintain a todo list reflecting the phases and progress.
-3. **Before advancing state**, record the worker's gate result and revision evidence, then run `scripts/check-phase.ps1` (Windows) or `scripts/check-phase.sh` (macOS/Linux) with the target phase. If the script fails (exit code 1 or 2), do NOT advance — route the issue back to the appropriate subagent.
+3. **Before advancing state**, record the worker's gate result and revision evidence, then run `scripts/check-phase.ps1` (Windows) or `scripts/check-phase.sh` (macOS/Linux) with the target phase and the resolved feature argument when applicable. If the script fails (exit code 1 or 2), do NOT advance — route the issue back to the appropriate subagent.
 4. Delegate the active phase to the matching subagent with a clear, self-contained task.
 5. After each subagent returns, update the relevant human-readable section and the corresponding gate record. Do not apply a transition until the validator passes.
 6. Apply only a transition from the table above. For review changes, increment `review_cycle` before routing to the Developer; for approval, reset it to `0`.

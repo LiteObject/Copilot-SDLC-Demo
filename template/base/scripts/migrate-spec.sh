@@ -8,15 +8,17 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/feature-context.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SPEC_PATH=""
+FEATURE_ID=""
 CONFIG_PATH=""
 BACKUP_PATH=""
 FORCE=0
 
 usage() {
     cat <<'EOF'
-Usage: ./scripts/migrate-spec.sh [--force] [--spec-path PATH] [--repo-root PATH]
+Usage: ./scripts/migrate-spec.sh [--force] [--feature-id ID] [--spec-path PATH] [--repo-root PATH]
        [--config-path PATH] [--backup-path PATH]
 
 Without --force the command reports what it would migrate and leaves the spec
@@ -33,6 +35,11 @@ while (($# > 0)); do
         --spec-path)
             [[ $# -ge 2 ]] || { echo '[FAIL] --spec-path requires a value.'; exit 1; }
             SPEC_PATH="$2"
+            shift 2
+            ;;
+        --feature-id)
+            [[ $# -ge 2 ]] || { echo '[FAIL] --feature-id requires a value.'; exit 1; }
+            FEATURE_ID="$2"
             shift 2
             ;;
         --repo-root)
@@ -62,14 +69,26 @@ while (($# > 0)); do
     esac
 done
 
-if [[ -z "$SPEC_PATH" ]]; then
-    SPEC_PATH="$REPO_ROOT/docs/spec.md"
+SOURCE_SPEC_PATH="${SPEC_PATH:-$REPO_ROOT/docs/spec.md}"
+if [[ -n "$FEATURE_ID" ]]; then
+    resolve_feature_context "$REPO_ROOT" '' "$FEATURE_ID" '' || exit 1
+    TARGET_SPEC_PATH="$SPEC_PATH"
+    SPEC_RELATIVE_PATH="$SPEC_RELATIVE_PATH"
+    SPEC_PATH="$SOURCE_SPEC_PATH"
+else
+    TARGET_SPEC_PATH="$SOURCE_SPEC_PATH"
+    SPEC_RELATIVE_PATH='docs/spec.md'
+    SPEC_PATH="$SOURCE_SPEC_PATH"
 fi
 if [[ -z "$CONFIG_PATH" ]]; then
     CONFIG_PATH="$REPO_ROOT/.github/sdlc-config.yml"
 fi
-if [[ ! -f "$SPEC_PATH" ]]; then
-    echo "[FAIL] docs/spec.md not found at: $SPEC_PATH"
+if [[ ! -f "$SOURCE_SPEC_PATH" ]]; then
+    echo "[FAIL] Legacy spec not found at: $SOURCE_SPEC_PATH"
+    exit 1
+fi
+if [[ -n "$FEATURE_ID" && -f "$TARGET_SPEC_PATH" ]]; then
+    echo "[FAIL] Feature spec already exists at: $TARGET_SPEC_PATH"
     exit 1
 fi
 
@@ -176,7 +195,9 @@ fi
 
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 if [[ -z "$BACKUP_PATH" ]]; then
-    BACKUP_RELATIVE=".sdlc/migrations/spec.md.${TIMESTAMP}.legacy.bak"
+    migration_folder='.sdlc/migrations'
+    [[ -z "$FEATURE_ID" ]] || migration_folder=".sdlc/migrations/$FEATURE_ID"
+    BACKUP_RELATIVE="$migration_folder/spec.md.${TIMESTAMP}.legacy.bak"
     BACKUP_PATH="$REPO_ROOT/$BACKUP_RELATIVE"
 elif [[ "$BACKUP_PATH" = /* ]]; then
     case "$BACKUP_PATH" in
@@ -232,6 +253,8 @@ mkdir -p "$backup_directory"
 
 metadata='---\n'
 metadata+="sdlc_schema: 1\n"
+metadata+="feature_id: \"$FEATURE_ID\"\n"
+metadata+="spec_path: \"$SPEC_RELATIVE_PATH\"\n"
 metadata+="current_phase: $CURRENT_PHASE\n"
 metadata+="design_required: $DESIGN_REQUIRED\n"
 metadata+="deployment_readiness_enabled: $DEPLOYMENT_READINESS_ENABLED\n"
@@ -264,11 +287,18 @@ for gate in requirements config install design planning build security review te
     metadata+="gate_${gate}_exit_code: \"\"\n"
     metadata+="gate_${gate}_result: NOT_RUN\n"
     metadata+="gate_${gate}_evidence: \"\"\n"
+    metadata+="gate_${gate}_feature_id: \"$FEATURE_ID\"\n"
+    metadata+="gate_${gate}_spec_path: \"$SPEC_RELATIVE_PATH\"\n"
 done
 metadata+='---\n'
 
-temporary_spec="$SPEC_PATH.migration.tmp"
+mkdir -p "$(dirname "$TARGET_SPEC_PATH")"
+temporary_spec="$TARGET_SPEC_PATH.migration.tmp"
 printf '%b%s\n' "$metadata" "$CONTENT" > "$temporary_spec"
-cp "$SPEC_PATH" "$BACKUP_PATH"
-mv "$temporary_spec" "$SPEC_PATH"
-echo '[PASS] Migrated docs/spec.md to workflow metadata schema 1.'
+cp "$SOURCE_SPEC_PATH" "$BACKUP_PATH"
+mv "$temporary_spec" "$TARGET_SPEC_PATH"
+if [[ -n "$FEATURE_ID" ]]; then
+    echo "[PASS] Migrated legacy spec to feature '$FEATURE_ID' at $TARGET_SPEC_PATH."
+else
+    echo '[PASS] Migrated docs/spec.md to workflow metadata schema 1.'
+fi

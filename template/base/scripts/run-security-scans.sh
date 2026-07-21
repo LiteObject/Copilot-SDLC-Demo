@@ -9,16 +9,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/feature-context.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_PATH=""
 EVIDENCE_DIRECTORY=""
 SPEC_PATH=""
+FEATURE_ID=""
 RECORD_SPEC=0
 
 usage() {
     cat <<'EOF'
 Usage: ./scripts/run-security-scans.sh [--config-path PATH] [--repo-root PATH]
-       [--evidence-directory PATH] [--spec-path PATH] [--record-spec]
+    [--evidence-directory PATH] [--spec-path PATH] [--feature-id ID] [--record-spec]
 EOF
 }
 while (($# > 0)); do
@@ -27,17 +29,21 @@ while (($# > 0)); do
         --repo-root) [[ $# -ge 2 ]] || { echo '[FAIL] --repo-root requires a value.'; exit 2; }; REPO_ROOT="$2"; shift 2 ;;
         --evidence-directory) [[ $# -ge 2 ]] || { echo '[FAIL] --evidence-directory requires a value.'; exit 2; }; EVIDENCE_DIRECTORY="$2"; shift 2 ;;
         --spec-path) [[ $# -ge 2 ]] || { echo '[FAIL] --spec-path requires a value.'; exit 2; }; SPEC_PATH="$2"; shift 2 ;;
+        --feature-id) [[ $# -ge 2 ]] || { echo '[FAIL] --feature-id requires a value.'; exit 2; }; FEATURE_ID="$2"; shift 2 ;;
         --record-spec) RECORD_SPEC=1; shift ;;
         --help|-h) usage; exit 0 ;;
         *) echo "[FAIL] Unknown option: $1"; usage >&2; exit 2 ;;
     esac
 done
 if [[ -z "$CONFIG_PATH" ]]; then CONFIG_PATH="$REPO_ROOT/.github/sdlc-config.yml"; fi
-if [[ -z "$SPEC_PATH" ]]; then SPEC_PATH="$REPO_ROOT/docs/spec.md"; fi
+requested_evidence_directory="$EVIDENCE_DIRECTORY"
+resolve_feature_context "$REPO_ROOT" "$SPEC_PATH" "$FEATURE_ID" "$EVIDENCE_DIRECTORY" || exit 2
+if [[ -z "$FEATURE_ID" ]]; then EVIDENCE_DIRECTORY="$requested_evidence_directory"; fi
 if [[ ! -f "$CONFIG_PATH" ]]; then echo "[FAIL] Config file not found: $CONFIG_PATH"; exit 1; fi
 
 VALIDATOR="$SCRIPT_DIR/validate-sdlc-config.sh"
 validator_args=(--config-path "$CONFIG_PATH" --repo-root "$REPO_ROOT")
+[[ -n "$FEATURE_ID" ]] && validator_args+=(--feature-id "$FEATURE_ID")
 if (( RECORD_SPEC == 1 )); then validator_args+=(--spec-path "$SPEC_PATH" --record-spec); fi
 set +e
 bash "$VALIDATOR" "${validator_args[@]}"
@@ -93,7 +99,7 @@ get_value() {
 }
 get_commit_sha() { git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown'; }
 get_tree_digest() {
-    if command -v sha256sum >/dev/null 2>&1; then git -C "$REPO_ROOT" diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>/dev/null | sha256sum | awk '{print $1}'; else git -C "$REPO_ROOT" diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>/dev/null | shasum -a 256 | awk '{print $1}'; fi
+    if command -v sha256sum >/dev/null 2>&1; then git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null | sha256sum | awk '{print $1}'; else git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null | shasum -a 256 | awk '{print $1}'; fi
 }
 json_escape() { local value="$1"; value="${value//\\/\\\\}"; value="${value//\"/\\\"}"; value="${value//$'\r'/\\r}"; value="${value//$'\n'/\\n}"; printf '"%s"' "$value"; }
 json_array() { local first=1 value; printf '['; for value in "$@"; do (( first == 0 )) && printf ','; json_escape "$value"; first=0; done; printf ']'; }
@@ -126,7 +132,9 @@ FINDING_EXITS=()
 
 for task in "${SECURITY_TASKS[@]}"; do
     set +e
-    bash "$TASK_RUNNER" --task "$task" --repo-root "$REPO_ROOT" --evidence-directory "$EVIDENCE_DIRECTORY" >/dev/null
+    task_args=(--task "$task" --repo-root "$REPO_ROOT" --evidence-directory "$EVIDENCE_DIRECTORY")
+    [[ -n "$FEATURE_ID" ]] && task_args+=(--feature-id "$FEATURE_ID")
+    bash "$TASK_RUNNER" "${task_args[@]}" >/dev/null
     task_exit=$?
     set -e
     log_path="$EVIDENCE_ROOT/$task.log"
@@ -150,7 +158,7 @@ done
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RECORD_PATH="$EVIDENCE_ROOT/security-scan.json"
 {
-    printf '{"schema":1,"kind":"sdlc-security-scan","command":"scripts/run-security-scans.sh","commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"tree_digest":'; json_escape "$TREE_DIGEST"; printf ',"timestamp":'; json_escape "$TIMESTAMP"; printf ',"exit_code":%d,"result":"%s","blocking_severities":' "$OVERALL_EXIT" "$([[ "$OVERALL_EXIT" -eq 0 ]] && echo PASS || echo FAIL)"; json_array "${BLOCKING_SEVERITIES[@]}"; printf ',"findings":['
+    printf '{"schema":1,"kind":"sdlc-security-scan","command":"scripts/run-security-scans.sh","feature_id":'; json_escape "$FEATURE_ID"; printf ',"spec_path":'; json_escape "$SPEC_RELATIVE_PATH"; printf ',"commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"tree_digest":'; json_escape "$TREE_DIGEST"; printf ',"timestamp":'; json_escape "$TIMESTAMP"; printf ',"exit_code":%d,"result":"%s","blocking_severities":' "$OVERALL_EXIT" "$([[ "$OVERALL_EXIT" -eq 0 ]] && echo PASS || echo FAIL)"; json_array "${BLOCKING_SEVERITIES[@]}"; printf ',"findings":['
     for (( index=0; index<${#FINDING_TASKS[@]}; index++ )); do
         (( index > 0 )) && printf ','
         printf '{"task":'; json_escape "${FINDING_TASKS[$index]}"; printf ',"severity":'; json_escape "${FINDING_SEVERITIES[$index]}"; printf ',"result":'; json_escape "${FINDING_RESULTS[$index]}"; printf ',"blocking":%s,"exit_code":%d,"evidence":' "${FINDING_BLOCKING[$index]}" "${FINDING_EXITS[$index]}"; json_escape "$EVIDENCE_DIRECTORY/${FINDING_TASKS[$index]}.log"; printf '}'
@@ -167,6 +175,10 @@ if (( RECORD_SPEC == 1 )); then
     set_spec_field gate_security_exit_code "$OVERALL_EXIT"
     if (( OVERALL_EXIT == 0 )); then set_spec_field gate_security_result PASS; else set_spec_field gate_security_result FAIL; fi
     set_spec_field gate_security_evidence "\"$relative_evidence\""
+    if [[ -n "$FEATURE_ID" ]]; then
+        set_spec_field gate_security_feature_id "\"$FEATURE_ID\""
+        set_spec_field gate_security_spec_path "\"$SPEC_RELATIVE_PATH\""
+    fi
 fi
 if (( OVERALL_EXIT != 0 )); then echo '[FAIL] Blocking security findings detected.'; exit 1; fi
 echo '[PASS] Security scan policy passed.'

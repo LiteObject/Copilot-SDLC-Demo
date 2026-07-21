@@ -13,10 +13,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/feature-context.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_PATH=""
 EVIDENCE_DIRECTORY=""
 SPEC_PATH=""
+FEATURE_ID=""
 RECORD_SPEC=0
 
 declare -A CFG=()
@@ -34,7 +36,7 @@ declare -a WARNINGS=()
 usage() {
     cat <<'EOF'
 Usage: ./scripts/validate-sdlc-config.sh [--config-path PATH] [--repo-root PATH]
-       [--evidence-directory PATH] [--spec-path PATH] [--record-spec]
+    [--evidence-directory PATH] [--spec-path PATH] [--feature-id ID] [--record-spec]
 EOF
 }
 
@@ -60,6 +62,11 @@ while (($# > 0)); do
             SPEC_PATH="$2"
             shift 2
             ;;
+        --feature-id)
+            [[ $# -ge 2 ]] || { echo '[FAIL] --feature-id requires a value.'; exit 2; }
+            FEATURE_ID="$2"
+            shift 2
+            ;;
         --record-spec)
             RECORD_SPEC=1
             shift
@@ -79,9 +86,9 @@ done
 if [[ -z "$CONFIG_PATH" ]]; then
     CONFIG_PATH="$REPO_ROOT/.github/sdlc-config.yml"
 fi
-if [[ -z "$SPEC_PATH" ]]; then
-    SPEC_PATH="$REPO_ROOT/docs/spec.md"
-fi
+requested_evidence_directory="$EVIDENCE_DIRECTORY"
+resolve_feature_context "$REPO_ROOT" "$SPEC_PATH" "$FEATURE_ID" "$EVIDENCE_DIRECTORY" || exit 2
+if [[ -z "$FEATURE_ID" ]]; then EVIDENCE_DIRECTORY="$requested_evidence_directory"; fi
 if [[ ! -f "$CONFIG_PATH" ]]; then
     echo "[FAIL] Config file not found: $CONFIG_PATH"
     exit 1
@@ -371,9 +378,9 @@ get_commit_sha() {
 }
 get_tree_digest() {
     if command -v sha256sum >/dev/null 2>&1; then
-        git -C "$REPO_ROOT" diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>/dev/null | sha256sum | awk '{print $1}'
+        git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null | sha256sum | awk '{print $1}'
     else
-        git -C "$REPO_ROOT" diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>/dev/null | shasum -a 256 | awk '{print $1}'
+        git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null | shasum -a 256 | awk '{print $1}'
     fi
 }
 json_escape() {
@@ -422,6 +429,10 @@ RECORD_PATH="$RECORD_DIRECTORY/config-validation.json"
     json_escape "$COMMIT_SHA"
     printf ',"tree_digest":'
     json_escape "$TREE_DIGEST"
+    printf ',"feature_id":'
+    json_escape "$FEATURE_ID"
+    printf ',"spec_path":'
+    json_escape "$SPEC_RELATIVE_PATH"
     printf ',"timestamp":'
     json_escape "$TIMESTAMP"
     if (( ${#ERRORS[@]} == 0 )); then printf ',"exit_code":0,"result":"PASS"'; else printf ',"exit_code":1,"result":"FAIL"'; fi
@@ -453,6 +464,10 @@ if (( RECORD_SPEC == 1 )); then
     set_spec_field gate_config_timestamp "\"$TIMESTAMP\""
     if (( ${#ERRORS[@]} == 0 )); then set_spec_field gate_config_exit_code '0'; set_spec_field gate_config_result 'PASS'; else set_spec_field gate_config_exit_code '1'; set_spec_field gate_config_result 'FAIL'; fi
     set_spec_field gate_config_evidence "\"$relative_evidence\""
+    if [[ -n "$FEATURE_ID" ]]; then
+        set_spec_field gate_config_feature_id "\"$FEATURE_ID\""
+        set_spec_field gate_config_spec_path "\"$SPEC_RELATIVE_PATH\""
+    fi
     [[ "$SECURITY_REVIEW_REQUIRED" != true ]] || set_spec_field security_gate_enabled true
     [[ "$AI_GOVERNANCE_ENABLED" != true ]] || set_spec_field ai_governance_enabled true
     [[ "$AI_LIFECYCLE_ENABLED" != true ]] || set_spec_field ai_lifecycle_enabled true

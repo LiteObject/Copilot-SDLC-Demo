@@ -35,17 +35,26 @@ param(
     [string] $RepoRoot,
     [string] $ConfigPath,
     [string] $BackupPath,
+    [string] $FeatureId,
     [switch] $Force
 )
 
 $ErrorActionPreference = 'Stop'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+. (Join-Path $PSScriptRoot 'feature-context.ps1')
 
 if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
-if (-not $SpecPath) {
-    $SpecPath = Join-Path $RepoRoot 'docs/spec.md'
+$sourceSpecPath = if ($SpecPath) { $SpecPath } else { Join-Path $RepoRoot 'docs/spec.md' }
+if ($FeatureId) {
+    $featureContext = Resolve-FeatureContext -RepoRoot $RepoRoot -FeatureId $FeatureId
+    $targetSpecPath = $featureContext.SpecPath
+    $specRelativePath = $featureContext.SpecRelativePath
+}
+else {
+    $targetSpecPath = $sourceSpecPath
+    $specRelativePath = 'docs/spec.md'
 }
 if (-not $ConfigPath) {
     $ConfigPath = Join-Path $RepoRoot '.github/sdlc-config.yml'
@@ -126,12 +135,16 @@ function Get-LegacyPlannedFiles {
     return @($files)
 }
 
-if (-not (Test-Path -LiteralPath $SpecPath -PathType Leaf)) {
-    Write-Host "[FAIL] docs/spec.md not found at: $SpecPath"
+if (-not (Test-Path -LiteralPath $sourceSpecPath -PathType Leaf)) {
+    Write-Host "[FAIL] Legacy spec not found at: $sourceSpecPath"
+    exit 1
+}
+if ($FeatureId -and (Test-Path -LiteralPath $targetSpecPath -PathType Leaf)) {
+    Write-Host "[FAIL] Feature spec already exists at: $targetSpecPath"
     exit 1
 }
 
-$content = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $SpecPath).Path)
+$content = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $sourceSpecPath).Path)
 $frontMatterMatch = [regex]::Match(
     $content,
     '\A---\r?\n(?<frontmatter>.*?)\r?\n---(?:\r?\n|\z)',
@@ -139,7 +152,7 @@ $frontMatterMatch = [regex]::Match(
 )
 if ($frontMatterMatch.Success) {
     if ($frontMatterMatch.Groups['frontmatter'].Value -match '(?m)^sdlc_schema:\s*1\s*$') {
-        Write-Host '[PASS] docs/spec.md already uses workflow metadata schema 1.'
+        Write-Host '[PASS] Source spec already uses workflow metadata schema 1.'
         exit 0
     }
     Write-Host '[FAIL] docs/spec.md has front matter but not the supported sdlc_schema: 1 format.'
@@ -181,7 +194,8 @@ if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
 
 $timestamp = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
 if (-not $BackupPath) {
-    $BackupPath = Join-Path $RepoRoot (".sdlc/migrations/spec.md.$($timestamp.Replace(':', '').Replace('-', '')).legacy.bak")
+    $migrationFolder = if ($FeatureId) { ".sdlc/migrations/$FeatureId" } else { '.sdlc/migrations' }
+    $BackupPath = Join-Path $RepoRoot ("$migrationFolder/spec.md.$($timestamp.Replace(':', '').Replace('-', '')).legacy.bak")
 }
 if (-not [System.IO.Path]::IsPathRooted($BackupPath)) {
     $BackupPath = Join-Path $RepoRoot $BackupPath
@@ -201,6 +215,8 @@ $metadataLines = New-Object System.Collections.Generic.List[string]
 foreach ($line in @(
         '---',
         'sdlc_schema: 1',
+        ('feature_id: "' + $FeatureId + '"'),
+        ('spec_path: "' + $specRelativePath + '"'),
         "current_phase: $currentPhase",
         "design_required: $($designRequired.ToString().ToLowerInvariant())",
         "deployment_readiness_enabled: $($deploymentReadinessEnabled.ToString().ToLowerInvariant())",
@@ -233,18 +249,20 @@ foreach ($gate in @('requirements', 'config', 'install', 'design', 'planning', '
             ('gate_' + $gate + '_timestamp: ""'),
             ('gate_' + $gate + '_exit_code: ""'),
             ('gate_' + $gate + '_result: NOT_RUN'),
-            ('gate_' + $gate + '_evidence: ""')
+            ('gate_' + $gate + '_evidence: ""'),
+            ('gate_' + $gate + '_feature_id: "' + $FeatureId + '"'),
+            ('gate_' + $gate + '_spec_path: "' + $specRelativePath + '"')
         )) { [void]$metadataLines.Add($line) }
 }
 [void]$metadataLines.Add('---')
-$newContent = ($metadataLines -join $newline) + $newline + $content
+    $newContent = ($metadataLines -join $newline) + $newline + $content
 
 Write-Host "[INFO] Legacy state: $currentPhase; review cycle: $reviewCycle; design required: $designRequired; readiness enabled: $deploymentReadinessEnabled"
 Write-Host "[INFO] Exact planned files recovered: $($plannedFiles.Count)"
 Write-Host "[INFO] Backup: $BackupPath"
 
 if (-not $Force) {
-    Write-Host '[BLOCKED] Migration is a dry run. Re-run with -Force to create the backup and update docs/spec.md.'
+    Write-Host '[BLOCKED] Migration is a dry run. Re-run with -Force to create the backup and write the feature spec.'
     exit 2
 }
 if (Test-Path -LiteralPath $BackupPath) {
@@ -257,14 +275,21 @@ if (Test-Path -LiteralPath $backupDirectory -PathType Leaf) {
 }
 
 New-Item -ItemType Directory -Path $backupDirectory -Force | Out-Null
-$temporarySpec = "$SpecPath.migration.tmp"
+$targetDirectory = Split-Path -Parent $targetSpecPath
+New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
+$temporarySpec = "$targetSpecPath.migration.tmp"
 try {
     [System.IO.File]::WriteAllText($BackupPath, $content, $Utf8NoBom)
     [System.IO.File]::WriteAllText($temporarySpec, $newContent, $Utf8NoBom)
-    Move-Item -LiteralPath $temporarySpec -Destination $SpecPath -Force
+    Move-Item -LiteralPath $temporarySpec -Destination $targetSpecPath -Force
 }
 finally {
     if (Test-Path -LiteralPath $temporarySpec) { Remove-Item -LiteralPath $temporarySpec -Force }
 }
 
-Write-Host '[PASS] Migrated docs/spec.md to workflow metadata schema 1.'
+if ($FeatureId) {
+    Write-Host "[PASS] Migrated legacy spec to feature '$FeatureId' at $targetSpecPath."
+}
+else {
+    Write-Host '[PASS] Migrated docs/spec.md to workflow metadata schema 1.'
+}

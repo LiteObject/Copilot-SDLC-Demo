@@ -15,6 +15,10 @@
 .PARAMETER SpecPath
     Path to the spec file. Defaults to docs/spec.md in the repository root.
 
+.PARAMETER FeatureId
+    Normalized feature identifier. Resolves the spec to
+    docs/specs/<feature-id>/spec.md and binds gate evidence to the feature.
+
 .PARAMETER RepoRoot
     Repository root used to resolve evidence paths and Git revision data.
 
@@ -31,6 +35,7 @@
 [CmdletBinding()]
 param(
     [string] $SpecPath,
+    [string] $FeatureId,
     [string] $RepoRoot,
     [ValidateSet('GATHERING_REQS', 'DESIGN', 'PLANNING', 'CODING', 'REVIEW', 'TESTING', 'DEPLOYMENT_READINESS', 'DONE')]
     [string] $Phase,
@@ -39,6 +44,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'feature-context.ps1')
 
 $validStates = @('GATHERING_REQS', 'DESIGN', 'PLANNING', 'CODING', 'REVIEW', 'TESTING', 'DEPLOYMENT_READINESS', 'DONE')
 $phaseOrder = @{
@@ -55,9 +61,12 @@ $phaseOrder = @{
 if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
-if (-not $SpecPath) {
-    $SpecPath = Join-Path $RepoRoot 'docs/spec.md'
-}
+
+$workflowContext = Resolve-FeatureContext -RepoRoot $RepoRoot -SpecPath $SpecPath -FeatureId $FeatureId
+$FeatureId = $workflowContext.FeatureId
+$SpecPath = $workflowContext.SpecPath
+$script:FeatureId = $FeatureId
+$script:SpecRelativePath = $workflowContext.SpecRelativePath
 
 function ConvertFrom-YamlScalar {
     param([string] $Value)
@@ -179,12 +188,15 @@ function Get-CurrentCommitSha {
 }
 
 function Get-CurrentTreeDigest {
-    param([string] $Root)
+    param(
+        [string] $Root,
+        [string] $SpecRelativePath = 'docs/spec.md'
+    )
 
     $parts = New-Object System.Collections.Generic.List[string]
     Push-Location $Root
     try {
-        $diff = (& git diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>$null | Out-String)
+        $diff = (& git diff --binary HEAD -- . ":(exclude)$SpecRelativePath" ':(exclude).sdlc/**' 2>$null | Out-String)
         if ($LASTEXITCODE -ne 0) {
             return ''
         }
@@ -268,6 +280,24 @@ function Test-GateRecord {
     $evidencePath = $evidence
     if ($evidence -and -not [System.IO.Path]::IsPathRooted($evidence)) {
         $evidencePath = Join-Path $Root $evidence
+    }
+    if ($script:FeatureId) {
+        $recordFeatureId = Get-MetadataValue $Metadata "${prefix}_feature_id"
+        $recordSpecPath = (Get-MetadataValue $Metadata "${prefix}_spec_path") -replace '\\', '/'
+        $expectedEvidencePrefix = ".sdlc/evidence/$($script:FeatureId)/"
+        $normalizedEvidence = $evidence -replace '\\', '/'
+        if ($recordFeatureId -ne $script:FeatureId) {
+            Write-Host "[FAIL] Gate '$Name': feature_id '$recordFeatureId' does not match '$($script:FeatureId)'."
+            $valid = $false
+        }
+        if ($recordSpecPath -ne $script:SpecRelativePath) {
+            Write-Host "[FAIL] Gate '$Name': spec_path '$recordSpecPath' does not match '$($script:SpecRelativePath)'."
+            $valid = $false
+        }
+        if ([System.IO.Path]::IsPathRooted($evidence) -or -not $normalizedEvidence.StartsWith($expectedEvidencePrefix, [System.StringComparison]::Ordinal)) {
+            Write-Host "[FAIL] Gate '$Name': evidence must be under '$expectedEvidencePrefix'."
+            $valid = $false
+        }
     }
     if (-not $evidence -or -not (Test-Path -LiteralPath $evidencePath -PathType Leaf)) {
         Write-Host "[FAIL] Gate '$Name': evidence file '$evidence' does not exist."
@@ -473,6 +503,19 @@ catch {
     exit 1
 }
 
+if ($FeatureId) {
+    $declaredFeatureId = Get-MetadataValue $metadata.Values 'feature_id'
+    $declaredSpecPath = (Get-MetadataValue $metadata.Values 'spec_path') -replace '\\', '/'
+    if ($declaredFeatureId -ne $FeatureId) {
+        Write-Host "[FAIL] Spec feature_id '$declaredFeatureId' does not match requested feature '$FeatureId'."
+        exit 1
+    }
+    if ($declaredSpecPath -ne $script:SpecRelativePath) {
+        Write-Host "[FAIL] Spec spec_path '$declaredSpecPath' does not match '$script:SpecRelativePath'."
+        exit 1
+    }
+}
+
 $schema = Get-MetadataValue $metadata.Values 'sdlc_schema'
 if ($schema -ne '1') {
     Write-Host "[FAIL] Unsupported sdlc_schema '$schema'. Expected '1'."
@@ -616,7 +659,7 @@ if ($currentState -eq 'TESTING' -and $targetPhase -eq 'DONE' -and $deploymentRea
 }
 
 $expectedCommitSha = if ($CommitSha) { $CommitSha } else { Get-CurrentCommitSha -Root $RepoRoot }
-$expectedTreeDigest = if ($TreeDigest) { $TreeDigest } else { Get-CurrentTreeDigest -Root $RepoRoot }
+$expectedTreeDigest = if ($TreeDigest) { $TreeDigest } else { Get-CurrentTreeDigest -Root $RepoRoot -SpecRelativePath $script:SpecRelativePath }
 $phase2Enabled = Test-Phase2Config -Root $RepoRoot
 $securityReviewRequired = $securityGateEnabled
 $releaseAssuranceEnabled = Test-ReleaseAssuranceEnabled -Root $RepoRoot

@@ -8,10 +8,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/feature-context.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_PATH=""
 EVIDENCE_DIRECTORY=""
 SPEC_PATH=""
+FEATURE_ID=""
 TASK='all'
 RECORD_SPEC=0
 
@@ -27,7 +29,7 @@ ACTIVE_LIST=""
 usage() {
     cat <<'EOF'
 Usage: ./scripts/run-sdlc-task.sh [--task TASK|all] [--config-path PATH]
-       [--repo-root PATH] [--evidence-directory PATH] [--spec-path PATH]
+    [--repo-root PATH] [--evidence-directory PATH] [--spec-path PATH] [--feature-id ID]
        [--record-spec]
 EOF
 }
@@ -59,6 +61,11 @@ while (($# > 0)); do
             SPEC_PATH="$2"
             shift 2
             ;;
+        --feature-id)
+            [[ $# -ge 2 ]] || { echo '[FAIL] --feature-id requires a value.'; exit 2; }
+            FEATURE_ID="$2"
+            shift 2
+            ;;
         --record-spec)
             RECORD_SPEC=1
             shift
@@ -76,8 +83,9 @@ while (($# > 0)); do
 done
 
 if [[ -z "$CONFIG_PATH" ]]; then CONFIG_PATH="$REPO_ROOT/.github/sdlc-config.yml"; fi
-if [[ -z "$SPEC_PATH" ]]; then SPEC_PATH="$REPO_ROOT/docs/spec.md"; fi
-REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
+requested_evidence_directory="$EVIDENCE_DIRECTORY"
+resolve_feature_context "$REPO_ROOT" "$SPEC_PATH" "$FEATURE_ID" "$EVIDENCE_DIRECTORY" || exit 2
+if [[ -z "$FEATURE_ID" ]]; then EVIDENCE_DIRECTORY="$requested_evidence_directory"; fi
 if [[ ! -f "$CONFIG_PATH" ]]; then echo "[FAIL] Config file not found: $CONFIG_PATH"; exit 1; fi
 
 trim_value() {
@@ -171,7 +179,7 @@ command_display() {
 }
 get_commit_sha() { git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown'; }
 get_tree_digest() {
-    if command -v sha256sum >/dev/null 2>&1; then git -C "$REPO_ROOT" diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>/dev/null | sha256sum | awk '{print $1}'; else git -C "$REPO_ROOT" diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>/dev/null | shasum -a 256 | awk '{print $1}'; fi
+    if command -v sha256sum >/dev/null 2>&1; then git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null | sha256sum | awk '{print $1}'; else git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null | shasum -a 256 | awk '{print $1}'; fi
 }
 json_escape() { local value="$1"; value="${value//\\/\\\\}"; value="${value//\"/\\\"}"; value="${value//$'\r'/\\r}"; value="${value//$'\n'/\\n}"; printf '"%s"' "$value"; }
 json_array() { local first=1 value; printf '['; for value in "$@"; do (( first == 0 )) && printf ','; json_escape "$value"; first=0; done; printf ']'; }
@@ -185,6 +193,7 @@ set_spec_field() {
 VALIDATOR="$SCRIPT_DIR/validate-sdlc-config.sh"
 validator_args=(--config-path "$CONFIG_PATH" --repo-root "$REPO_ROOT")
 [[ -n "$EVIDENCE_DIRECTORY" ]] && validator_args+=(--evidence-directory "$EVIDENCE_DIRECTORY")
+[[ -n "$FEATURE_ID" ]] && validator_args+=(--feature-id "$FEATURE_ID")
 if (( RECORD_SPEC == 1 )); then validator_args+=(--spec-path "$SPEC_PATH" --record-spec); fi
 set +e
 bash "$VALIDATOR" "${validator_args[@]}"
@@ -232,7 +241,7 @@ for task_name in "${TASK_NAMES[@]}"; do
     relative_log="${log_path:${#REPO_ROOT}}"
     relative_log="${relative_log#/}"
     {
-        printf '{"schema":1,"kind":"sdlc-task","task":'; json_escape "$task_name"; printf ',"executable":'; json_escape "$executable"; printf ',"args":'; json_array "${TASK_ARGUMENTS[@]}"; printf ',"command":'; json_escape "$command"; printf ',"commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"tree_digest":'; json_escape "$TREE_DIGEST"; printf ',"started_at":'; json_escape "$started_at"; printf ',"finished_at":'; json_escape "$finished_at"; printf ',"exit_code":%d,"result":"%s","evidence":' "$exit_code" "$result"; json_escape "$relative_log"; printf '}\n'
+        printf '{"schema":1,"kind":"sdlc-task","task":'; json_escape "$task_name"; printf ',"executable":'; json_escape "$executable"; printf ',"args":'; json_array "${TASK_ARGUMENTS[@]}"; printf ',"command":'; json_escape "$command"; printf ',"feature_id":'; json_escape "$FEATURE_ID"; printf ',"spec_path":'; json_escape "$SPEC_RELATIVE_PATH"; printf ',"commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"tree_digest":'; json_escape "$TREE_DIGEST"; printf ',"started_at":'; json_escape "$started_at"; printf ',"finished_at":'; json_escape "$finished_at"; printf ',"exit_code":%d,"result":"%s","evidence":' "$exit_code" "$result"; json_escape "$relative_log"; printf '}\n'
     } > "$record_path"
     if (( RECORD_SPEC == 1 )); then
         set_spec_field "gate_${task_name}_command" "\"$command\""
@@ -242,6 +251,10 @@ for task_name in "${TASK_NAMES[@]}"; do
         set_spec_field "gate_${task_name}_exit_code" "$exit_code"
         set_spec_field "gate_${task_name}_result" "$result"
         set_spec_field "gate_${task_name}_evidence" "\"$relative_log\""
+        if [[ -n "$FEATURE_ID" ]]; then
+            set_spec_field "gate_${task_name}_feature_id" "\"$FEATURE_ID\""
+            set_spec_field "gate_${task_name}_spec_path" "\"$SPEC_RELATIVE_PATH\""
+        fi
     fi
     echo "[$result] $task_name; evidence: $record_path"
     (( exit_code == 0 )) || exit "$exit_code"

@@ -4,14 +4,21 @@ param(
     [string] $RepoRoot,
     [string] $SpecPath,
     [string] $EvidenceDirectory,
+    [string] $FeatureId,
     [switch] $RecordSpec
 )
 
 $ErrorActionPreference = 'Stop'
+$featureContextPath = Join-Path $PSScriptRoot 'feature-context.ps1'
+if (-not (Test-Path -LiteralPath $featureContextPath -PathType Leaf)) { $featureContextPath = Join-Path $PSScriptRoot '../../../base/scripts/feature-context.ps1' }
+. $featureContextPath
 if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
 if (-not $ConfigPath) { $ConfigPath = Join-Path $RepoRoot '.github/sdlc-config.yml' }
-if (-not $SpecPath) { $SpecPath = Join-Path $RepoRoot 'docs/spec.md' }
-if (-not $EvidenceDirectory) { $EvidenceDirectory = '.sdlc/evidence' }
+$workflowContext = Resolve-FeatureContext -RepoRoot $RepoRoot -SpecPath $SpecPath -FeatureId $FeatureId -EvidenceDirectory $EvidenceDirectory
+$FeatureId = $workflowContext.FeatureId
+$SpecPath = $workflowContext.SpecPath
+$specRelativePath = $workflowContext.SpecRelativePath
+$EvidenceDirectory = if ($FeatureId) { $workflowContext.EvidenceDirectory } elseif ($EvidenceDirectory) { $EvidenceDirectory } else { '.sdlc/evidence' }
 
 function Get-LifecycleBody {
     param([string] $Content)
@@ -37,8 +44,8 @@ function Get-GitValue {
     finally { Pop-Location }
 }
 function Get-TreeDigest {
-    param([string] $Root)
-    $payload = Get-GitValue -Root $Root -Arguments @('diff','--binary','HEAD','--','.',':(exclude)docs/spec.md',':(exclude).sdlc/**')
+    param([string] $Root, [string] $SpecRelativePath)
+    $payload = Get-GitValue -Root $Root -Arguments @('diff','--binary','HEAD','--','.',":(exclude)$SpecRelativePath",':(exclude).sdlc/**')
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try { return (($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($payload)) | ForEach-Object { $_.ToString('x2') }) -join '') }
     finally { $sha.Dispose() }
@@ -87,7 +94,9 @@ $errors = New-Object System.Collections.Generic.List[string]
 foreach ($field in $taskFields) {
     $taskName = Get-LifecycleValue -Body $body -Name $field
     Write-Host "[RUN] AI lifecycle check: $taskName"
-    & pwsh -NoProfile -ExecutionPolicy Bypass -File $runner -Task $taskName -RepoRoot $RepoRoot -ConfigPath $ConfigPath -EvidenceDirectory $EvidenceDirectory
+    $runnerArguments = @('-Task', $taskName, '-RepoRoot', $RepoRoot, '-ConfigPath', $ConfigPath, '-EvidenceDirectory', $EvidenceDirectory)
+    if ($FeatureId) { $runnerArguments += @('-FeatureId', $FeatureId) }
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $runner @runnerArguments
     $exitCode = $LASTEXITCODE
     $result = if ($exitCode -eq 0) { 'PASS' } else { 'FAIL' }
     $evidence = Join-Path $RepoRoot "$EvidenceDirectory/$taskName.log"
@@ -97,7 +106,7 @@ foreach ($field in $taskFields) {
 }
 
 $commitSha = Get-GitValue -Root $RepoRoot -Arguments @('rev-parse','HEAD')
-$treeDigest = Get-TreeDigest -Root $RepoRoot
+$treeDigest = Get-TreeDigest -Root $RepoRoot -SpecRelativePath $specRelativePath
 $recordDirectory = Join-Path $RepoRoot $EvidenceDirectory
 New-Item -ItemType Directory -Path $recordDirectory -Force | Out-Null
 $checkedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
@@ -108,6 +117,8 @@ $record = [ordered]@{
     kind = 'sdlc-ai-lifecycle'
     command = 'scripts/run-ai-lifecycle.ps1'
     risk_tier = Get-LifecycleValue -Body $body -Name 'risk_tier'
+    feature_id = $FeatureId
+    spec_path = $specRelativePath
     commit_sha = $commitSha
     tree_digest = $treeDigest
     checked_at = $checkedAt
@@ -136,6 +147,10 @@ if ($RecordSpec) {
         gate_ai_lifecycle_exit_code = [string]$exitCode
         gate_ai_lifecycle_result = $result
         gate_ai_lifecycle_evidence = Get-RelativePath -Root $RepoRoot -Path $summaryPath
+    }
+    if ($FeatureId) {
+        $updates['gate_ai_lifecycle_feature_id'] = $FeatureId
+        $updates['gate_ai_lifecycle_spec_path'] = $specRelativePath
     }
     Set-SpecMetadata -Path $SpecPath -Updates $updates
 }

@@ -34,10 +34,12 @@ param(
     [string] $RepoRoot,
     [string] $EvidenceDirectory,
     [string] $SpecPath,
+    [string] $FeatureId,
     [switch] $RecordSpec
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'feature-context.ps1')
 
 if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -45,9 +47,12 @@ if (-not $RepoRoot) {
 if (-not $ConfigPath) {
     $ConfigPath = Join-Path $RepoRoot '.github/sdlc-config.yml'
 }
-if (-not $SpecPath) {
-    $SpecPath = Join-Path $RepoRoot 'docs/spec.md'
-}
+$requestedEvidenceDirectory = $EvidenceDirectory
+$workflowContext = Resolve-FeatureContext -RepoRoot $RepoRoot -SpecPath $SpecPath -FeatureId $FeatureId -EvidenceDirectory $EvidenceDirectory
+$FeatureId = $workflowContext.FeatureId
+$SpecPath = $workflowContext.SpecPath
+$specRelativePath = $workflowContext.SpecRelativePath
+if ($FeatureId) { $EvidenceDirectory = $workflowContext.EvidenceDirectory } else { $EvidenceDirectory = $requestedEvidenceDirectory }
 
 function ConvertFrom-ConfigScalar {
     param([string] $Value)
@@ -230,9 +235,9 @@ function Get-GitValue {
 }
 
 function Get-TreeDigest {
-    param([string] $Root)
+    param([string] $Root, [string] $SpecRelativePath)
 
-    $payload = Get-GitValue -Root $Root -Arguments @('diff', '--binary', 'HEAD', '--', '.', ':(exclude)docs/spec.md', ':(exclude).sdlc/**')
+    $payload = Get-GitValue -Root $Root -Arguments @('diff', '--binary', 'HEAD', '--', '.', ":(exclude)$SpecRelativePath", ':(exclude).sdlc/**')
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
@@ -391,7 +396,7 @@ else {
 }
 
 $commitSha = Get-GitValue -Root $RepoRoot -Arguments @('rev-parse', 'HEAD')
-$treeDigest = Get-TreeDigest -Root $RepoRoot
+$treeDigest = Get-TreeDigest -Root $RepoRoot -SpecRelativePath $specRelativePath
 $timestamp = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
 $recordDirectory = Join-Path $RepoRoot $evidenceDirectory
 New-Item -ItemType Directory -Path $recordDirectory -Force | Out-Null
@@ -415,6 +420,8 @@ $record = [ordered]@{
     result        = if ($errors.Count -eq 0) { 'PASS' } else { 'FAIL' }
     errors        = @($errors)
     warnings      = @($warnings)
+    feature_id    = $FeatureId
+    spec_path     = $specRelativePath
 }
 $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $recordPath -Encoding utf8
 Write-Host "[INFO] Validation evidence: $recordPath"
@@ -430,6 +437,10 @@ if ($RecordSpec) {
         gate_config_exit_code = if ($errors.Count -eq 0) { '0' } else { '1' }
         gate_config_result = if ($errors.Count -eq 0) { 'PASS' } else { 'FAIL' }
         gate_config_evidence = $relativeEvidence
+    }
+    if ($FeatureId) {
+        $updates['gate_config_feature_id'] = $FeatureId
+        $updates['gate_config_spec_path'] = $specRelativePath
     }
     if ($securityReviewRequired -eq 'true') { $updates['security_gate_enabled'] = 'true' }
     if ($aiGovernanceEnabled -eq 'true') { $updates['ai_governance_enabled'] = 'true' }

@@ -19,7 +19,7 @@ You are the **Developer**. You implement the plan and fix bugs. You write clean,
 ## Approach
 
 **When implementing (CODING):**
-1. **Declare scope:** read the **Implementation Plan** and **File Structure** in `docs/spec.md`. Record the exact list of planned files — this is your allowed file set. See `.github/instructions/scope-audit.instructions.md`.
+1. **Select context and declare scope:** resolve the feature spec before reading the **Implementation Plan** and **File Structure**. In feature mode, use `docs/specs/<feature-id>/spec.md` and pass the same feature ID to scope and task commands. Record the exact list of planned files — this is your allowed file set. See `.github/instructions/scope-audit.instructions.md`.
 2. **Drift check:** compare the plan checklist against the actual files in `src/`. Report:
    - Files in `src/` not in the plan (possible scope creep, manual edits, or stale artifacts).
    - Plan items with no corresponding file yet (these are the ones you need to create).
@@ -28,7 +28,7 @@ You are the **Developer**. You implement the plan and fix bugs. You write clean,
 4. Create the planned files under `src/`, in dependency order.
 5. Keep functions small and follow `.github/instructions/coding-standards.instructions.md`.
 6. Mark each implemented file done in the plan.
-7. **Build gate:** if `validation.install_task` is `install`, run the named install task first. Then run `scripts/run-sdlc-task.ps1 -Task build` on Windows or `scripts/run-sdlc-task.sh --task build` elsewhere, with `-RecordSpec` / `--record-spec` when handing off. If it fails, fix the errors before REVIEW. Do not hand off a broken build.
+7. **Build gate:** if `validation.install_task` is `install`, run the named install task first. Then run `scripts/run-sdlc-task.ps1 -Task build` on Windows or `scripts/run-sdlc-task.sh --task build` elsewhere, adding `-FeatureId <id>` / `--feature-id <id>` when applicable and using `-RecordSpec` / `--record-spec` when handing off. If it fails, fix the errors before REVIEW. Do not hand off a broken build.
 
 **When fixing (after Reviewer or QA feedback):**
 1. **Drift check first:** verify that the files you are about to patch still exist at the expected paths and haven't been manually altered since the last cycle. If a file is missing or has unexpected content, report it to the Supervisor before applying fixes.

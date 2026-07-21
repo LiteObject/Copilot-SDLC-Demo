@@ -3,10 +3,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/feature-context.sh" 2>/dev/null || . "$SCRIPT_DIR/../../../base/scripts/feature-context.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_PATH=""
 SPEC_PATH=""
 EVIDENCE_DIRECTORY='.sdlc/evidence'
+FEATURE_ID=""
 RECORD_SPEC=0
 
 while (($# > 0)); do
@@ -15,6 +17,7 @@ while (($# > 0)); do
         --repo-root) [[ $# -ge 2 ]] || { echo '[FAIL] --repo-root requires a value.'; exit 2; }; REPO_ROOT="$2"; shift 2 ;;
         --spec-path) [[ $# -ge 2 ]] || { echo '[FAIL] --spec-path requires a value.'; exit 2; }; SPEC_PATH="$2"; shift 2 ;;
         --evidence-directory) [[ $# -ge 2 ]] || { echo '[FAIL] --evidence-directory requires a value.'; exit 2; }; EVIDENCE_DIRECTORY="$2"; shift 2 ;;
+        --feature-id) [[ $# -ge 2 ]] || { echo '[FAIL] --feature-id requires a value.'; exit 2; }; FEATURE_ID="$2"; shift 2 ;;
         --record-spec) RECORD_SPEC=1; shift ;;
         --help|-h) echo 'Usage: run-measurement.sh [--config-path PATH] [--repo-root PATH] [--spec-path PATH] [--evidence-directory PATH] [--record-spec]'; exit 0 ;;
         *) echo "[FAIL] Unknown option: $1"; exit 2 ;;
@@ -22,8 +25,7 @@ while (($# > 0)); do
 done
 
 if [[ -z "$CONFIG_PATH" ]]; then CONFIG_PATH="$REPO_ROOT/.github/sdlc-config.yml"; fi
-if [[ -z "$SPEC_PATH" ]]; then SPEC_PATH="$REPO_ROOT/docs/spec.md"; fi
-REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
+resolve_feature_context "$REPO_ROOT" "$SPEC_PATH" "$FEATURE_ID" "$EVIDENCE_DIRECTORY" || exit 2
 [[ -f "$CONFIG_PATH" ]] || { echo "[FAIL] Config file not found: $CONFIG_PATH"; exit 1; }
 
 trim_value() { local value="$1"; value="${value#"${value%%[![:space:]]*}"}"; value="${value%"${value##*[![:space:]]}"}"; printf '%s' "$value"; }
@@ -36,7 +38,7 @@ json_escape() { local value="$1"; value="${value//\\/\\\\}"; value="${value//"/\
 json_array() { local first=1 value; printf '['; for value in "$@"; do if (( first == 0 )); then printf ','; fi; json_escape "$value"; first=0; done; printf ']'; }
 safe_path() { local path="$1"; [[ -n "$path" && "$path" != /* && "$path" != ../* && "$path" != */../* && "$path" != '..' && ! "$path" =~ ^[A-Za-z]:/ ]]; }
 get_commit_sha() { git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown'; }
-get_tree_digest() { if command -v sha256sum >/dev/null 2>&1; then git -C "$REPO_ROOT" diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>/dev/null | sha256sum | awk '{print $1}'; else git -C "$REPO_ROOT" diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>/dev/null | shasum -a 256 | awk '{print $1}'; fi; }
+get_tree_digest() { if command -v sha256sum >/dev/null 2>&1; then git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null | sha256sum | awk '{print $1}'; else git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null | shasum -a 256 | awk '{print $1}'; fi; }
 set_spec_field() { local key="$1" value="$2" temp="$SPEC_PATH.phase7.tmp"; [[ -f "$SPEC_PATH" ]] || { echo "[FAIL] Spec file not found for --record-spec: $SPEC_PATH"; return 1; }; if ! awk -v key="$key" -v value="$value" '$0 ~ "^" key ":" { print key ": " value; found=1; next } { print } END { if (!found) exit 3 }' "$SPEC_PATH" > "$temp"; then rm -f "$temp"; echo "[FAIL] Spec metadata field '$key' was not found in $SPEC_PATH"; return 1; fi; mv "$temp" "$SPEC_PATH"; }
 
 if [[ -z "$BODY" || "$(get_value enabled false)" != true ]]; then echo '[SKIP] Measurement is disabled.'; exit 0; fi
@@ -57,7 +59,9 @@ run_check() {
     task="$(get_value "$field")"
     echo "[RUN] Measurement check: $task"
     set +e
-    bash "$RUNNER" --task "$task" --repo-root "$REPO_ROOT" --config-path "$CONFIG_PATH" --evidence-directory "$EVIDENCE_DIRECTORY"
+    runner_args=(--task "$task" --repo-root "$REPO_ROOT" --config-path "$CONFIG_PATH" --evidence-directory "$EVIDENCE_DIRECTORY")
+    [[ -n "$FEATURE_ID" ]] && runner_args+=(--feature-id "$FEATURE_ID")
+    bash "$RUNNER" "${runner_args[@]}"
     exit_code=$?
     set -e
     if (( exit_code == 0 )); then result='PASS'; else result='FAIL'; fi
@@ -135,6 +139,10 @@ if (( RECORD_SPEC == 1 )); then
     set_spec_field gate_measurement_exit_code "$EXIT_CODE"
     set_spec_field gate_measurement_result "$RESULT"
     set_spec_field gate_measurement_evidence "\"$EVIDENCE_DIRECTORY/measurement.json\""
+    if [[ -n "$FEATURE_ID" ]]; then
+        set_spec_field gate_measurement_feature_id "\"$FEATURE_ID\""
+        set_spec_field gate_measurement_spec_path "\"$SPEC_RELATIVE_PATH\""
+    fi
 fi
 if (( EXIT_CODE != 0 )); then echo '[FAIL] Measurement checks failed.'; exit 1; fi
 echo "[PASS] Measurement checks complete: $RECORD_DIRECTORY/measurement.json"

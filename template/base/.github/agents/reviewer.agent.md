@@ -19,7 +19,7 @@ You are the **Code Reviewer**. You judge the quality of the Developer's implemen
    - Files in `src/` that are NOT in the plan (possible scope creep or manual edits).
    - Plan items checked as done that have NO corresponding file in `src/` (plan out of sync with reality).
    - Files whose names or locations differ from the plan.
-2. **Scope audit:** per `.github/instructions/scope-audit.instructions.md`, verify that every changed file traces to the plan. Flag extra files as `[SCOPE CREEP]` and missing plan items as `[MISSING]`.
+2. **Scope audit:** per `.github/instructions/scope-audit.instructions.md`, verify that every changed file traces to the selected feature plan. Run the audit with `-FeatureId <id>` / `--feature-id <id>` when applicable. Flag extra files as `[SCOPE CREEP]` and missing plan items as `[MISSING]`.
 3. Read the **Implementation Plan**, **File Structure**, and **Acceptance Criteria** in `docs/spec.md`.
 4. Read the implemented files under `src/`.
 5. Review against:

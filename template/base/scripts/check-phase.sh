@@ -10,15 +10,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/feature-context.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SPEC_PATH=""
+FEATURE_ID=""
+SPEC_RELATIVE_PATH='docs/spec.md'
 TARGET_PHASE=""
 EXPECTED_COMMIT_SHA=""
 EXPECTED_TREE_DIGEST=""
 
 usage() {
     cat <<'EOF'
-Usage: ./scripts/check-phase.sh [TARGET_PHASE] [--spec-path PATH] [--repo-root PATH]
+Usage: ./scripts/check-phase.sh [TARGET_PHASE] [--feature-id ID] [--spec-path PATH] [--repo-root PATH]
        [--commit-sha SHA] [--tree-digest DIGEST]
 EOF
 }
@@ -28,6 +31,11 @@ while (($# > 0)); do
         --spec-path)
             [[ $# -ge 2 ]] || { echo '[FAIL] --spec-path requires a value.'; exit 1; }
             SPEC_PATH="$2"
+            shift 2
+            ;;
+        --feature-id)
+            [[ $# -ge 2 ]] || { echo '[FAIL] --feature-id requires a value.'; exit 1; }
+            FEATURE_ID="$2"
             shift 2
             ;;
         --repo-root)
@@ -65,9 +73,7 @@ while (($# > 0)); do
     esac
 done
 
-if [[ -z "$SPEC_PATH" ]]; then
-    SPEC_PATH="$REPO_ROOT/docs/spec.md"
-fi
+if ! resolve_feature_context "$REPO_ROOT" "$SPEC_PATH" "$FEATURE_ID" ''; then exit 1; fi
 
 if [[ ! -f "$SPEC_PATH" ]]; then
     echo "[FAIL] docs/spec.md not found at: $SPEC_PATH"
@@ -145,6 +151,20 @@ done <<< "$FRONT_MATTER"
 meta_get() {
     printf '%s' "${META[$1]-}"
 }
+
+if [[ -n "$FEATURE_ID" ]]; then
+    declared_feature_id="$(meta_get feature_id)"
+    declared_spec_path="${META[spec_path]-}"
+    declared_spec_path="${declared_spec_path//\\//}"
+    if [[ "$declared_feature_id" != "$FEATURE_ID" ]]; then
+        echo "[FAIL] Spec feature_id '$declared_feature_id' does not match requested feature '$FEATURE_ID'."
+        exit 1
+    fi
+    if [[ "$declared_spec_path" != "$SPEC_RELATIVE_PATH" ]]; then
+        echo "[FAIL] Spec spec_path '$declared_spec_path' does not match '$SPEC_RELATIVE_PATH'."
+        exit 1
+    fi
+fi
 
 require_metadata_key() {
     local key="$1"
@@ -353,7 +373,7 @@ get_current_commit_sha() {
 get_current_tree_digest() {
     local diff_payload untracked_file full_path file_hash
     local -a parts=()
-    diff_payload="$(git -C "$REPO_ROOT" diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>/dev/null || true)"
+    diff_payload="$(git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null || true)"
     if ! git -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
         return 0
     fi
@@ -425,6 +445,25 @@ test_gate() {
     if [[ -z "$evidence" || ! -f "$evidence_path" ]]; then
         echo "[FAIL] Gate '$name': evidence file '$evidence' does not exist."
         valid=0
+    fi
+    if [[ -n "$FEATURE_ID" ]]; then
+        record_feature_id="${META[${prefix}_feature_id]-}"
+        record_spec_path="${META[${prefix}_spec_path]-}"
+        record_spec_path="${record_spec_path//\\//}"
+        evidence_prefix=".sdlc/evidence/$FEATURE_ID/"
+        normalized_evidence="${evidence//\\//}"
+        if [[ "$record_feature_id" != "$FEATURE_ID" ]]; then
+            echo "[FAIL] Gate '$name': feature_id '$record_feature_id' does not match '$FEATURE_ID'."
+            valid=0
+        fi
+        if [[ "$record_spec_path" != "$SPEC_RELATIVE_PATH" ]]; then
+            echo "[FAIL] Gate '$name': spec_path '$record_spec_path' does not match '$SPEC_RELATIVE_PATH'."
+            valid=0
+        fi
+        if [[ "$evidence" = /* || "$normalized_evidence" != "$evidence_prefix"* ]]; then
+            echo "[FAIL] Gate '$name': evidence must be under '$evidence_prefix'."
+            valid=0
+        fi
     fi
     if (( valid == 1 )); then
         echo "[PASS] Gate '$name': evidence is valid for the current revision."

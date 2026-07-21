@@ -3,10 +3,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/feature-context.sh" 2>/dev/null || . "$SCRIPT_DIR/../../../base/scripts/feature-context.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_PATH=""
 SPEC_PATH=""
 EVIDENCE_DIRECTORY='.sdlc/evidence'
+FEATURE_ID=""
 RECORD_SPEC=0
 
 while (($# > 0)); do
@@ -15,6 +17,7 @@ while (($# > 0)); do
 		--repo-root) [[ $# -ge 2 ]] || { echo '[FAIL] --repo-root requires a value.'; exit 2; }; REPO_ROOT="$2"; shift 2 ;;
 		--spec-path) [[ $# -ge 2 ]] || { echo '[FAIL] --spec-path requires a value.'; exit 2; }; SPEC_PATH="$2"; shift 2 ;;
 		--evidence-directory) [[ $# -ge 2 ]] || { echo '[FAIL] --evidence-directory requires a value.'; exit 2; }; EVIDENCE_DIRECTORY="$2"; shift 2 ;;
+		--feature-id) [[ $# -ge 2 ]] || { echo '[FAIL] --feature-id requires a value.'; exit 2; }; FEATURE_ID="$2"; shift 2 ;;
 		--record-spec) RECORD_SPEC=1; shift ;;
 		--help|-h) echo 'Usage: run-ai-governance.sh [--config-path PATH] [--repo-root PATH] [--spec-path PATH] [--evidence-directory PATH] [--record-spec]'; exit 0 ;;
 		*) echo "[FAIL] Unknown option: $1"; exit 2 ;;
@@ -22,7 +25,7 @@ while (($# > 0)); do
 done
 
 if [[ -z "$CONFIG_PATH" ]]; then CONFIG_PATH="$REPO_ROOT/.github/sdlc-config.yml"; fi
-if [[ -z "$SPEC_PATH" ]]; then SPEC_PATH="$REPO_ROOT/docs/spec.md"; fi
+resolve_feature_context "$REPO_ROOT" "$SPEC_PATH" "$FEATURE_ID" "$EVIDENCE_DIRECTORY" || exit 2
 [[ -f "$CONFIG_PATH" ]] || { echo "[FAIL] Config file not found: $CONFIG_PATH"; exit 1; }
 
 trim_value() { local value="$1"; value="${value#"${value%%[![:space:]]*}"}"; value="${value%"${value##*[![:space:]]}"}"; printf '%s' "$value"; }
@@ -32,7 +35,7 @@ get_value() { local field="$1" default="${2-}" value; value="$(printf '%s\n' "$B
 json_escape() { local value="$1"; value="${value//\\/\\\\}"; value="${value//"/\\"}"; value="${value//$'\r'/\r}"; value="${value//$'\n'/\n}"; printf '"%s"' "$value"; }
 json_array() { local first=1 value; printf '['; for value in "$@"; do (( first == 0 )) && printf ','; json_escape "$value"; first=0; done; printf ']'; }
 get_commit_sha() { git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown'; }
-get_tree_digest() { if command -v sha256sum >/dev/null 2>&1; then git -C "$REPO_ROOT" diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>/dev/null | sha256sum | awk '{print $1}'; else git -C "$REPO_ROOT" diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>/dev/null | shasum -a 256 | awk '{print $1}'; fi; }
+get_tree_digest() { if command -v sha256sum >/dev/null 2>&1; then git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null | sha256sum | awk '{print $1}'; else git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null | shasum -a 256 | awk '{print $1}'; fi; }
 set_spec_field() { local key="$1" value="$2" temp="$SPEC_PATH.phase5.tmp"; [[ -f "$SPEC_PATH" ]] || { echo "[FAIL] Spec file not found for --record-spec: $SPEC_PATH"; return 1; }; if ! awk -v key="$key" -v value="$value" '$0 ~ "^" key ":" { print key ": " value; found=1; next } { print } END { if (!found) exit 3 }' "$SPEC_PATH" > "$temp"; then rm -f "$temp"; echo "[FAIL] Spec metadata field '$key' was not found in $SPEC_PATH"; return 1; fi; mv "$temp" "$SPEC_PATH"; }
 
 CONFIG_CONTENT="$(tr -d '\r' < "$CONFIG_PATH")"
@@ -46,7 +49,9 @@ RUNNER="$REPO_ROOT/scripts/run-sdlc-task.sh"
 [[ -f "$RUNNER" ]] || { echo "[FAIL] Task runner not found: $RUNNER"; exit 1; }
 echo "[RUN] AI governance evaluation: $TASK_NAME"
 set +e
-bash "$RUNNER" --task "$TASK_NAME" --repo-root "$REPO_ROOT" --config-path "$CONFIG_PATH" --evidence-directory "$EVIDENCE_DIRECTORY"
+runner_args=(--task "$TASK_NAME" --repo-root "$REPO_ROOT" --config-path "$CONFIG_PATH" --evidence-directory "$EVIDENCE_DIRECTORY")
+[[ -n "$FEATURE_ID" ]] && runner_args+=(--feature-id "$FEATURE_ID")
+bash "$RUNNER" "${runner_args[@]}"
 TASK_EXIT=$?
 set -e
 if (( TASK_EXIT == 0 )); then RESULT='PASS'; else RESULT='FAIL'; fi
@@ -71,6 +76,10 @@ if (( RECORD_SPEC == 1 )); then
 	set_spec_field gate_ai_governance_exit_code "$TASK_EXIT"
 	set_spec_field gate_ai_governance_result "$RESULT"
 	set_spec_field gate_ai_governance_evidence "\"$RELATIVE_SUMMARY\""
+	if [[ -n "$FEATURE_ID" ]]; then
+		set_spec_field gate_ai_governance_feature_id "\"$FEATURE_ID\""
+		set_spec_field gate_ai_governance_spec_path "\"$SPEC_RELATIVE_PATH\""
+	fi
 fi
 if (( TASK_EXIT != 0 )); then echo '[FAIL] AI governance evaluation failed.'; exit 1; fi
 echo "[PASS] AI governance evaluation complete: $SUMMARY_PATH"

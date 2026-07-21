@@ -14,13 +14,20 @@ param(
     [string] $RepoRoot,
     [string] $EvidenceDirectory,
     [string] $SpecPath,
+    [string] $FeatureId,
     [switch] $RecordSpec
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'feature-context.ps1')
 if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
 if (-not $ConfigPath) { $ConfigPath = Join-Path $RepoRoot '.github/sdlc-config.yml' }
-if (-not $SpecPath) { $SpecPath = Join-Path $RepoRoot 'docs/spec.md' }
+$requestedEvidenceDirectory = $EvidenceDirectory
+$workflowContext = Resolve-FeatureContext -RepoRoot $RepoRoot -SpecPath $SpecPath -FeatureId $FeatureId -EvidenceDirectory $EvidenceDirectory
+$FeatureId = $workflowContext.FeatureId
+$SpecPath = $workflowContext.SpecPath
+$specRelativePath = $workflowContext.SpecRelativePath
+if ($FeatureId) { $EvidenceDirectory = $workflowContext.EvidenceDirectory } else { $EvidenceDirectory = $requestedEvidenceDirectory }
 
 function Get-ConfigListFromText {
     param([string] $Content, [string] $Path)
@@ -50,8 +57,8 @@ function Get-GitValue {
     finally { Pop-Location }
 }
 function Get-TreeDigest {
-    param([string] $Root)
-    $payload = Get-GitValue -Root $Root -Arguments @('diff', '--binary', 'HEAD', '--', '.', ':(exclude)docs/spec.md', ':(exclude).sdlc/**')
+    param([string] $Root, [string] $SpecRelativePath)
+    $payload = Get-GitValue -Root $Root -Arguments @('diff', '--binary', 'HEAD', '--', '.', ":(exclude)$SpecRelativePath", ':(exclude).sdlc/**')
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try { return (($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($payload)) | ForEach-Object { $_.ToString('x2') }) -join '') }
     finally { $sha.Dispose() }
@@ -81,6 +88,7 @@ function Set-SpecMetadata {
 if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { Write-Host "[FAIL] Config file not found: $ConfigPath"; exit 1 }
 $configValidator = Join-Path $PSScriptRoot 'validate-sdlc-config.ps1'
 $validatorArgs = @('-ConfigPath', $ConfigPath, '-RepoRoot', $RepoRoot)
+if ($FeatureId) { $validatorArgs += @('-FeatureId', $FeatureId) }
 if ($RecordSpec) { $validatorArgs += @('-SpecPath', $SpecPath, '-RecordSpec') }
 & pwsh -NoProfile -ExecutionPolicy Bypass -File $configValidator @validatorArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -92,12 +100,13 @@ if (-not $EvidenceDirectory) { $EvidenceDirectory = Get-ConfigValueFromText -Con
 $evidenceRoot = Join-Path $RepoRoot $EvidenceDirectory
 New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
 $commitSha = Get-GitValue -Root $RepoRoot -Arguments @('rev-parse', 'HEAD')
-$treeDigest = Get-TreeDigest -Root $RepoRoot
+$treeDigest = Get-TreeDigest -Root $RepoRoot -SpecRelativePath $specRelativePath
 $taskRunner = Join-Path $PSScriptRoot 'run-sdlc-task.ps1'
 $findings = @()
 $overallExit = 0
 foreach ($task in $securityTasks) {
     $runnerArgs = @('-Task', $task, '-RepoRoot', $RepoRoot, '-EvidenceDirectory', $EvidenceDirectory)
+    if ($FeatureId) { $runnerArgs += @('-FeatureId', $FeatureId) }
     & pwsh -NoProfile -ExecutionPolicy Bypass -File $taskRunner @runnerArgs
     $taskExit = $LASTEXITCODE
     $logPath = Join-Path $evidenceRoot "$task.log"
@@ -115,13 +124,13 @@ foreach ($task in $securityTasks) {
 }
 $timestamp = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
 $recordPath = Join-Path $evidenceRoot 'security-scan.json'
-$record = [ordered]@{ schema = 1; kind = 'sdlc-security-scan'; command = 'scripts/run-security-scans.ps1'; commit_sha = $commitSha; tree_digest = $treeDigest; timestamp = $timestamp; exit_code = $overallExit; result = if ($overallExit -eq 0) { 'PASS' } else { 'FAIL' }; blocking_severities = @($blockingSeverities); findings = @($findings) }
+$record = [ordered]@{ schema = 1; kind = 'sdlc-security-scan'; command = 'scripts/run-security-scans.ps1'; feature_id = $FeatureId; spec_path = $specRelativePath; commit_sha = $commitSha; tree_digest = $treeDigest; timestamp = $timestamp; exit_code = $overallExit; result = if ($overallExit -eq 0) { 'PASS' } else { 'FAIL' }; blocking_severities = @($blockingSeverities); findings = @($findings) }
 $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $recordPath -Encoding utf8
 Write-Host "[INFO] Security evidence: $recordPath"
 if ($RecordSpec) {
     $repoFullPath = (Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
     $relativeEvidence = $recordPath.Substring($repoFullPath.Length) -replace '\\', '/'
-    Set-SpecMetadata -Path $SpecPath -Updates @{
+    $updates = @{
         gate_security_command = 'scripts/run-security-scans.ps1'
         gate_security_commit_sha = $commitSha
         gate_security_tree_digest = $treeDigest
@@ -130,6 +139,11 @@ if ($RecordSpec) {
         gate_security_result = if ($overallExit -eq 0) { 'PASS' } else { 'FAIL' }
         gate_security_evidence = $relativeEvidence
     }
+    if ($FeatureId) {
+        $updates['gate_security_feature_id'] = $FeatureId
+        $updates['gate_security_spec_path'] = $specRelativePath
+    }
+    Set-SpecMetadata -Path $SpecPath -Updates $updates
 }
 if ($overallExit -ne 0) { Write-Host '[FAIL] Blocking security findings detected.'; exit 1 }
 Write-Host '[PASS] Security scan policy passed.'

@@ -4,10 +4,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/feature-context.sh" 2>/dev/null || . "$SCRIPT_DIR/../../../base/scripts/feature-context.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_PATH=""
 SPEC_PATH=""
 EVIDENCE_DIRECTORY='.sdlc/evidence'
+FEATURE_ID=""
 RECORD_SPEC=0
 
 while (($# > 0)); do
@@ -16,13 +18,14 @@ while (($# > 0)); do
         --repo-root) [[ $# -ge 2 ]] || { echo '[FAIL] --repo-root requires a value.'; exit 2; }; REPO_ROOT="$2"; shift 2 ;;
         --spec-path) [[ $# -ge 2 ]] || { echo '[FAIL] --spec-path requires a value.'; exit 2; }; SPEC_PATH="$2"; shift 2 ;;
         --evidence-directory) [[ $# -ge 2 ]] || { echo '[FAIL] --evidence-directory requires a value.'; exit 2; }; EVIDENCE_DIRECTORY="$2"; shift 2 ;;
+        --feature-id) [[ $# -ge 2 ]] || { echo '[FAIL] --feature-id requires a value.'; exit 2; }; FEATURE_ID="$2"; shift 2 ;;
         --record-spec) RECORD_SPEC=1; shift ;;
         --help|-h) echo 'Usage: prepare-release.sh [--config-path PATH] [--repo-root PATH] [--spec-path PATH] [--record-spec]'; exit 0 ;;
         *) echo "[FAIL] Unknown option: $1"; exit 2 ;;
     esac
 done
 if [[ -z "$CONFIG_PATH" ]]; then CONFIG_PATH="$REPO_ROOT/.github/sdlc-config.yml"; fi
-if [[ -z "$SPEC_PATH" ]]; then SPEC_PATH="$REPO_ROOT/docs/spec.md"; fi
+resolve_feature_context "$REPO_ROOT" "$SPEC_PATH" "$FEATURE_ID" "$EVIDENCE_DIRECTORY" || exit 2
 if [[ ! -f "$CONFIG_PATH" ]]; then echo "[FAIL] Config not found: $CONFIG_PATH"; exit 1; fi
 
 trim_value() { local value="$1"; value="${value#"${value%%[![:space:]]*}"}"; value="${value%"${value##*[![:space:]]}"}"; printf '%s' "$value"; }
@@ -38,7 +41,7 @@ bash "$RELEASE_VALIDATOR" --config-path "$CONFIG_PATH" --repo-root "$REPO_ROOT" 
 RUNNER="$REPO_ROOT/scripts/run-sdlc-task.sh"
 RELEASE_DIR="$REPO_ROOT/.sdlc/release"
 mkdir -p "$RELEASE_DIR"
-run_task() { local task="$1"; args=(--task "$task" --repo-root "$REPO_ROOT" --evidence-directory "$EVIDENCE_DIRECTORY"); (( RECORD_SPEC == 1 )) && args+=(--spec-path "$SPEC_PATH" --record-spec); bash "$RUNNER" "${args[@]}"; }
+run_task() { local task="$1"; args=(--task "$task" --repo-root "$REPO_ROOT" --evidence-directory "$EVIDENCE_DIRECTORY"); [[ -n "$FEATURE_ID" ]] && args+=(--feature-id "$FEATURE_ID"); (( RECORD_SPEC == 1 )) && args+=(--spec-path "$SPEC_PATH" --record-spec); bash "$RUNNER" "${args[@]}"; }
 ARTIFACT_PATH="$REPO_ROOT/$(get_value artifact_path)"
 SBOM_PATH="$REPO_ROOT/$(get_value sbom_path)"
 PROVENANCE_PATH="$REPO_ROOT/$(get_value provenance_path)"
@@ -59,7 +62,7 @@ sha256_file() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | a
 json_escape() { local value="$1"; value="${value//\\/\\\\}"; value="${value//\"/\\\"}"; value="${value//$'\r'/\\r}"; value="${value//$'\n'/\\n}"; printf '"%s"' "$value"; }
 json_array() { local first=1 value; printf '['; for value in "$@"; do (( first == 0 )) && printf ','; json_escape "$value"; first=0; done; printf ']'; }
 COMMIT_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf unknown)"
-TREE_DIGEST="$(git -C "$REPO_ROOT" diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>/dev/null | sha256_file /dev/stdin)"
+TREE_DIGEST="$(git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null | sha256_file /dev/stdin)"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ARTIFACT_REL="${ARTIFACT_PATH#"$REPO_ROOT/"}"
 SBOM_REL="${SBOM_PATH#"$REPO_ROOT/"}"
@@ -73,12 +76,16 @@ EOF
 get_list promotion_environments; ENVIRONMENTS=("${LIST_RESULT[@]}"); get_list required_approvals; APPROVALS=("${LIST_RESULT[@]}")
 MANIFEST_PATH="$RELEASE_DIR/release-manifest.json"
 {
-    printf '{"schema":1,"kind":"sdlc-release-manifest","version":'; json_escape "${GITHUB_REF_NAME:-${COMMIT_SHA:0:12}}"; printf ',"source_commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"source_tree_digest":'; json_escape "$TREE_DIGEST"; printf ',"created_at":'; json_escape "$TIMESTAMP"; printf ',"artifact":{"path":'; json_escape "$ARTIFACT_REL"; printf ',"sha256":'; json_escape "$ARTIFACT_SHA"; printf ',"bytes":%s},"sbom":{"path":' "$(wc -c < "$ARTIFACT_PATH")"; json_escape "$SBOM_REL"; printf ',"sha256":'; json_escape "$SBOM_SHA"; printf ',"format":'; json_escape "$SBOM_FORMAT"; printf '},"provenance":{"path":'; json_escape "$PROVENANCE_REL"; printf '},"promotion_environments":'; json_array "${ENVIRONMENTS[@]}"; printf ',"required_approvals":'; json_array "${APPROVALS[@]}"; printf '}\n'
+    printf '{"schema":1,"kind":"sdlc-release-manifest","version":'; json_escape "${GITHUB_REF_NAME:-${COMMIT_SHA:0:12}}"; printf ',"feature_id":'; json_escape "$FEATURE_ID"; printf ',"spec_path":'; json_escape "$SPEC_RELATIVE_PATH"; printf ',"source_commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"source_tree_digest":'; json_escape "$TREE_DIGEST"; printf ',"created_at":'; json_escape "$TIMESTAMP"; printf ',"artifact":{"path":'; json_escape "$ARTIFACT_REL"; printf ',"sha256":'; json_escape "$ARTIFACT_SHA"; printf ',"bytes":%s},"sbom":{"path":' "$(wc -c < "$ARTIFACT_PATH")"; json_escape "$SBOM_REL"; printf ',"sha256":'; json_escape "$SBOM_SHA"; printf ',"format":'; json_escape "$SBOM_FORMAT"; printf '},"provenance":{"path":'; json_escape "$PROVENANCE_REL"; printf '},"promotion_environments":'; json_array "${ENVIRONMENTS[@]}"; printf ',"required_approvals":'; json_array "${APPROVALS[@]}"; printf '}\n'
 } > "$MANIFEST_PATH"
 if (( RECORD_SPEC == 1 )); then
     relative_evidence="${MANIFEST_PATH:${#REPO_ROOT}}"; relative_evidence="${relative_evidence#/}"
     set_spec_field() { local key="$1" value="$2" temp="$SPEC_PATH.phase3.tmp"; awk -v key="$key" -v value="$value" '$0 ~ "^" key ":" { print key ": " value; found=1; next } { print } END { if (!found) exit 3 }' "$SPEC_PATH" > "$temp" || { rm -f "$temp"; return 1; }; mv "$temp" "$SPEC_PATH"; }
     set_spec_field gate_release_command '"scripts/prepare-release.sh"'; set_spec_field gate_release_commit_sha "\"$COMMIT_SHA\""; set_spec_field gate_release_tree_digest "\"$TREE_DIGEST\""; set_spec_field gate_release_timestamp "\"$TIMESTAMP\""; set_spec_field gate_release_exit_code 0; set_spec_field gate_release_result PASS; set_spec_field gate_release_evidence "\"$relative_evidence\""
+    if [[ -n "$FEATURE_ID" ]]; then
+        set_spec_field gate_release_feature_id "\"$FEATURE_ID\""
+        set_spec_field gate_release_spec_path "\"$SPEC_RELATIVE_PATH\""
+    fi
 fi
 echo "[PASS] Release prepared: $MANIFEST_PATH"
 exit 0

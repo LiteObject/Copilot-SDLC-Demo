@@ -22,14 +22,23 @@ param(
     [string] $RepoRoot,
     [string] $EvidenceDirectory,
     [string] $SpecPath,
+    [string] $FeatureId,
     [switch] $RecordSpec
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'feature-context.ps1')
 if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
 if (Test-Path -LiteralPath $RepoRoot -PathType Container) { $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path }
 if (-not $ConfigPath) { $ConfigPath = Join-Path $RepoRoot '.github/sdlc-config.yml' }
-if (-not $SpecPath) { $SpecPath = Join-Path $RepoRoot 'docs/spec.md' }
+$requestedEvidenceDirectory = $EvidenceDirectory
+$workflowContext = Resolve-FeatureContext -RepoRoot $RepoRoot -SpecPath $SpecPath -FeatureId $FeatureId -EvidenceDirectory $EvidenceDirectory
+$FeatureId = $workflowContext.FeatureId
+$SpecPath = $workflowContext.SpecPath
+$specRelativePath = $workflowContext.SpecRelativePath
+if ($FeatureId) { $EvidenceDirectory = $workflowContext.EvidenceDirectory } else { $EvidenceDirectory = $requestedEvidenceDirectory }
+$script:FeatureId = $FeatureId
+$script:SpecRelativePath = $specRelativePath
 
 function ConvertFrom-ConfigScalar {
     param([string] $Value)
@@ -120,8 +129,8 @@ function Get-GitValue {
     finally { Pop-Location }
 }
 function Get-TreeDigest {
-    param([string] $Root)
-    $payload = Get-GitValue -Root $Root -Arguments @('diff', '--binary', 'HEAD', '--', '.', ':(exclude)docs/spec.md', ':(exclude).sdlc/**')
+    param([string] $Root, [string] $SpecRelativePath)
+    $payload = Get-GitValue -Root $Root -Arguments @('diff', '--binary', 'HEAD', '--', '.', ":(exclude)$SpecRelativePath", ':(exclude).sdlc/**')
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try { return (($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($payload)) | ForEach-Object { $_.ToString('x2') }) -join '') }
     finally { $sha.Dispose() }
@@ -166,7 +175,7 @@ function Invoke-Task {
     $finished = [DateTime]::UtcNow
     $result = if ($exitCode -eq 0) { 'PASS' } else { 'FAIL' }
     $relativeLog = $logPath.Substring(((Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar).Length) -replace '\\', '/'
-    $record = [ordered]@{ schema = 1; kind = 'sdlc-task'; task = $TaskName; executable = $executable; args = @($arguments); command = $command; commit_sha = $CommitSha; tree_digest = $TreeDigest; started_at = $started.ToString('yyyy-MM-ddTHH:mm:ssZ'); finished_at = $finished.ToString('yyyy-MM-ddTHH:mm:ssZ'); exit_code = $exitCode; result = $result; evidence = $relativeLog }
+    $record = [ordered]@{ schema = 1; kind = 'sdlc-task'; task = $TaskName; executable = $executable; args = @($arguments); command = $command; feature_id = $script:FeatureId; spec_path = $script:SpecRelativePath; commit_sha = $CommitSha; tree_digest = $TreeDigest; started_at = $started.ToString('yyyy-MM-ddTHH:mm:ssZ'); finished_at = $finished.ToString('yyyy-MM-ddTHH:mm:ssZ'); exit_code = $exitCode; result = $result; evidence = $relativeLog }
     $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $recordPath -Encoding utf8
     if ($RecordSpec) {
         $updates = @{
@@ -178,6 +187,10 @@ function Invoke-Task {
             ("gate_${TaskName}_result") = $result
             ("gate_${TaskName}_evidence") = $relativeLog
         }
+        if ($script:FeatureId) {
+            $updates[("gate_${TaskName}_feature_id")] = $script:FeatureId
+            $updates[("gate_${TaskName}_spec_path")] = $script:SpecRelativePath
+        }
         Set-SpecMetadata -Path $SpecPath -Updates $updates
     }
     Write-Host "[$result] $TaskName; evidence: $recordPath"
@@ -187,6 +200,7 @@ function Invoke-Task {
 if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { Write-Host "[FAIL] Config file not found: $ConfigPath"; exit 1 }
 $validator = Join-Path $PSScriptRoot 'validate-sdlc-config.ps1'
 $validatorArguments = @('-ConfigPath', $ConfigPath, '-RepoRoot', $RepoRoot, '-EvidenceDirectory', $EvidenceDirectory)
+if ($FeatureId) { $validatorArguments += @('-FeatureId', $FeatureId) }
 if ($RecordSpec) { $validatorArguments += @('-SpecPath', $SpecPath, '-RecordSpec') }
 & pwsh -NoProfile -ExecutionPolicy Bypass -File $validator @validatorArguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -196,7 +210,7 @@ if (-not $EvidenceDirectory) { $EvidenceDirectory = Get-ConfigValue $config 'val
 $evidenceRoot = Join-Path $RepoRoot $EvidenceDirectory
 New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
 $commitSha = Get-GitValue -Root $RepoRoot -Arguments @('rev-parse', 'HEAD')
-$treeDigest = Get-TreeDigest -Root $RepoRoot
+$treeDigest = Get-TreeDigest -Root $RepoRoot -SpecRelativePath $specRelativePath
 $taskNames = @()
 if ($Task -eq 'all') {
     $installTask = Get-ConfigValue $config 'validation.install_task'

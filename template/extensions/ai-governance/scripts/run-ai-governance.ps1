@@ -4,14 +4,21 @@ param(
     [string] $RepoRoot,
     [string] $SpecPath,
     [string] $EvidenceDirectory,
+    [string] $FeatureId,
     [switch] $RecordSpec
 )
 
 $ErrorActionPreference = 'Stop'
+$featureContextPath = Join-Path $PSScriptRoot 'feature-context.ps1'
+if (-not (Test-Path -LiteralPath $featureContextPath -PathType Leaf)) { $featureContextPath = Join-Path $PSScriptRoot '../../../base/scripts/feature-context.ps1' }
+. $featureContextPath
 if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
 if (-not $ConfigPath) { $ConfigPath = Join-Path $RepoRoot '.github/sdlc-config.yml' }
-if (-not $SpecPath) { $SpecPath = Join-Path $RepoRoot 'docs/spec.md' }
-if (-not $EvidenceDirectory) { $EvidenceDirectory = '.sdlc/evidence' }
+$workflowContext = Resolve-FeatureContext -RepoRoot $RepoRoot -SpecPath $SpecPath -FeatureId $FeatureId -EvidenceDirectory $EvidenceDirectory
+$FeatureId = $workflowContext.FeatureId
+$SpecPath = $workflowContext.SpecPath
+$specRelativePath = $workflowContext.SpecRelativePath
+$EvidenceDirectory = if ($FeatureId) { $workflowContext.EvidenceDirectory } elseif ($EvidenceDirectory) { $EvidenceDirectory } else { '.sdlc/evidence' }
 
 function Get-GovernanceBody {
     param([string] $Content)
@@ -40,8 +47,8 @@ function Get-GitValue {
 }
 
 function Get-TreeDigest {
-    param([string] $Root)
-    $payload = Get-GitValue -Root $Root -Arguments @('diff','--binary','HEAD','--','.',':(exclude)docs/spec.md',':(exclude).sdlc/**')
+    param([string] $Root, [string] $SpecRelativePath)
+    $payload = Get-GitValue -Root $Root -Arguments @('diff','--binary','HEAD','--','.',":(exclude)$SpecRelativePath",':(exclude).sdlc/**')
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try { return (($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($payload)) | ForEach-Object { $_.ToString('x2') }) -join '') }
     finally { $sha.Dispose() }
@@ -88,7 +95,9 @@ $taskName = Get-GovernanceValue -Body $body -Name 'evaluation_task'
 $runner = Join-Path $RepoRoot 'scripts/run-sdlc-task.ps1'
 if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { Write-Host "[FAIL] Task runner not found: $runner"; exit 1 }
 Write-Host "[RUN] AI governance evaluation: $taskName"
-& pwsh -NoProfile -ExecutionPolicy Bypass -File $runner -Task $taskName -RepoRoot $RepoRoot -ConfigPath $ConfigPath -EvidenceDirectory $EvidenceDirectory
+$runnerArguments = @('-Task', $taskName, '-RepoRoot', $RepoRoot, '-ConfigPath', $ConfigPath, '-EvidenceDirectory', $EvidenceDirectory)
+if ($FeatureId) { $runnerArguments += @('-FeatureId', $FeatureId) }
+& pwsh -NoProfile -ExecutionPolicy Bypass -File $runner @runnerArguments
 $exitCode = $LASTEXITCODE
 $result = if ($exitCode -eq 0) { 'PASS' } else { 'FAIL' }
 $taskEvidence = Join-Path $RepoRoot "$EvidenceDirectory/$taskName.json"
@@ -102,7 +111,9 @@ $record = [ordered]@{
     command = 'scripts/run-ai-governance.ps1'
     task = $taskName
     commit_sha = Get-GitValue -Root $RepoRoot -Arguments @('rev-parse','HEAD')
-    tree_digest = Get-TreeDigest -Root $RepoRoot
+    feature_id = $FeatureId
+    spec_path = $specRelativePath
+    tree_digest = Get-TreeDigest -Root $RepoRoot -SpecRelativePath $specRelativePath
     evaluated_at = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
     exit_code = $exitCode
     result = $result
@@ -112,7 +123,7 @@ $record = [ordered]@{
 $record | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $summaryPath -Encoding utf8
 if ($RecordSpec) {
     $relativeSummary = Get-RelativePath -Root $RepoRoot -Path $summaryPath
-    Set-SpecMetadata -Path $SpecPath -Updates @{
+    $updates = @{
         ai_governance_enabled = 'true'
         gate_ai_governance_command = 'scripts/run-ai-governance.ps1'
         gate_ai_governance_commit_sha = $record.commit_sha
@@ -122,6 +133,11 @@ if ($RecordSpec) {
         gate_ai_governance_result = $result
         gate_ai_governance_evidence = $relativeSummary
     }
+    if ($FeatureId) {
+        $updates['gate_ai_governance_feature_id'] = $FeatureId
+        $updates['gate_ai_governance_spec_path'] = $specRelativePath
+    }
+    Set-SpecMetadata -Path $SpecPath -Updates $updates
 }
 if ($exitCode -ne 0) { Write-Host '[FAIL] AI governance evaluation failed.'; exit 1 }
 Write-Host "[PASS] AI governance evaluation complete: $summaryPath"
