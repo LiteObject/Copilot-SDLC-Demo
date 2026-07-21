@@ -112,3 +112,27 @@ Run `scripts/run-ai-governance.ps1 -RecordSpec` or
 evaluation task must exercise representative planning, testing, security,
 scope-drift, prompt-injection, and unsafe-tool-use scenarios. A failed task
 records `FAIL` evidence and blocks the governance handoff.
+
+## AI Product Lifecycle Governance
+
+For products that expose or depend on AI, install the `ai-lifecycle` extension
+and set `ai_lifecycle.enabled: true`. This extension is conditional; using AI
+to assist coding does not by itself require it. Configure the risk tier, named
+risk owner, intended and prohibited uses, affected communities, applicable
+law, versioned model and data inventory, required runtime controls, monitoring
+signals, and the `ai_evaluation`, `ai_red_team`, `ai_production_exercise`,
+`ai_rollback`, and `ai_decommission` task records.
+
+The validator requires the impact assessment, inventory, evaluation plan and
+report path, risk disposition, red-team plan, runtime-control plan, production
+monitoring plan, rollback plan, decommissioning plan, model card, and system
+card. It also checks that authorization, least privilege, rate and cost limits,
+input/output validation, safety filters, PII handling, audit logs, human
+escalation, kill-switch, and safe-fallback controls are declared.
+
+Run `scripts/validate-ai-lifecycle.ps1` or `.sh`, then
+`scripts/run-ai-lifecycle.ps1 -RecordSpec` or
+`scripts/run-ai-lifecycle.sh --record-spec`. The runner executes the configured
+evaluation, red-team, and production-exercise tasks, writes
+`.sdlc/evidence/ai-lifecycle.json` and the configured evaluation report, and
+records `gate_ai_lifecycle_*` in `docs/spec.md`.

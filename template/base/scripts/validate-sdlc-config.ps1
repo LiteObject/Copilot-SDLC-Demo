@@ -288,7 +288,7 @@ catch {
 $errors = New-Object System.Collections.Generic.List[string]
 $warnings = New-Object System.Collections.Generic.List[string]
 $allowedPackageManagers = @('npm', 'yarn', 'pnpm', 'pip', 'poetry', 'cargo', 'dotnet', 'go', 'none')
-$allowedTasks = @('install', 'build', 'test', 'lint', 'type_check', 'sast', 'secrets', 'dependency_audit', 'license_audit', 'container_scan', 'iac_scan', 'dast', 'security_tests', 'package', 'sbom', 'sign', 'verify_signature', 'deploy', 'smoke_test', 'rollback', 'health_check', 'telemetry_check', 'failure_drill', 'post_release_check', 'agent_evaluation')
+$allowedTasks = @('install', 'build', 'test', 'lint', 'type_check', 'sast', 'secrets', 'dependency_audit', 'license_audit', 'container_scan', 'iac_scan', 'dast', 'security_tests', 'package', 'sbom', 'sign', 'verify_signature', 'deploy', 'smoke_test', 'rollback', 'health_check', 'telemetry_check', 'failure_drill', 'post_release_check', 'agent_evaluation', 'ai_evaluation', 'ai_red_team', 'ai_production_exercise', 'ai_rollback', 'ai_decommission')
 $allowedTestLayers = @('unit', 'integration', 'contract', 'api', 'e2e', 'accessibility', 'performance', 'resilience', 'fuzz', 'property')
 $allowedSeverities = @('critical', 'high', 'medium', 'low', 'info')
 
@@ -347,6 +347,7 @@ $mappingRequired = Get-ConfigValue $config 'quality_security.acceptance_mapping_
 if ($mappingRequired -notin @('true', 'false')) { Add-ValidationError $errors 'quality_security.acceptance_mapping_required must be true or false.' }
 $securityReviewRequired = Get-ConfigValue $config 'security.review_required'
 $aiGovernanceEnabled = Get-ConfigValue $config 'ai_governance.enabled' 'false'
+$aiLifecycleEnabled = Get-ConfigValue $config 'ai_lifecycle.enabled' 'false'
 if ($securityReviewRequired -notin @('true', 'false')) { Add-ValidationError $errors 'security.review_required must be true or false.' }
 $securityTasks = @(Get-ConfigList $config 'security.tasks' | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 $blockingSeverities = @(Get-ConfigList $config 'security.blocking_severities' | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
@@ -431,6 +432,7 @@ if ($RecordSpec) {
     }
     if ($securityReviewRequired -eq 'true') { $updates['security_gate_enabled'] = 'true' }
     if ($aiGovernanceEnabled -eq 'true') { $updates['ai_governance_enabled'] = 'true' }
+    if ($aiLifecycleEnabled -eq 'true') { $updates['ai_lifecycle_enabled'] = 'true' }
     try { Set-SpecMetadata -Path $SpecPath -Updates $updates; Write-Host "[INFO] Recorded gate_config_* in $SpecPath" }
     catch { Write-Host "[FAIL] Could not record config gate in spec: $($_.Exception.Message)"; $errors.Add($_.Exception.Message) }
 }

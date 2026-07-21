@@ -181,6 +181,10 @@ template/
               ai-governance/.github/instructions/
               ai-governance/docs/
               ai-governance/scripts/
+              ai-lifecycle/.github/workflows/
+              ai-lifecycle/.github/instructions/
+              ai-lifecycle/docs/
+              ai-lifecycle/scripts/
 tools/
        scaffold-sdlc.ps1                    # Windows/PowerShell installer
        scaffold-sdlc.sh                     # Bash installer
@@ -267,6 +271,12 @@ extensions so a target repository receives only the capabilities it selects.
 - `record-ai-change` rejects non-allowlisted boundaries and restricted actions without an explicit human approval, then appends task, agent, model, instruction, grant, tool-call, file, validation, approval, and disposition evidence to a JSONL ledger.
 - `run-ai-governance` executes the configured representative and adversarial evaluation task, records revision-bound results, and can update the `gate_ai_governance_*` fields in `docs/spec.md`.
 - The extension instructions treat repository content, issue text, web pages, retrieved documents, model output, and tool output as untrusted data. The workflow retains validation and evaluation evidence without granting write or deployment permissions.
+
+### 6.14 AI product lifecycle governance
+- The opt-in `ai-lifecycle` extension applies only to products that expose or depend on AI; AI-assisted coding alone does not enable it.
+- `validate-ai-lifecycle` checks the impact assessment, versioned system inventory, evaluation and red-team plans, risk disposition, runtime controls, monitoring, rollback, decommissioning, model card, and system card.
+- `run-ai-lifecycle` executes configured evaluation, red-team, and production-exercise tasks, writes the configured evaluation report plus lifecycle evidence, and records `gate_ai_lifecycle_*` in `docs/spec.md`.
+- The lifecycle instructions require material-change reevaluation, risk-proportionate red teaming, runtime authorization and safety controls, production monitoring, kill-switch or rollback evidence, and user-appropriate limitations, data-use, support, and appeal documentation.
 
 ---
 

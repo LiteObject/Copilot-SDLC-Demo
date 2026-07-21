@@ -8,7 +8,7 @@ consumer project.
 - `template/base/` contains the files installed into every target repository.
 - `template/extensions/` contains opt-in capabilities installed only when
   selected by the scaffold command, including `ai-governance` for repositories
-  that use coding agents.
+  that use coding agents and `ai-lifecycle` for AI-enabled products.
 - `tools/` contains authoring-repository scaffolding and validation utilities.
 - `docs/architecture/` and `docs/roadmap.md` describe the template; they are
   not copied into consuming repositories.
@@ -29,7 +29,7 @@ consumer project.
   installer behavior.
 - Keep PowerShell and Bash validators, task runners, security/release scripts,
   and governance scripts behaviorally aligned; run `tests/phase0/`,
-  `tests/phase1/`, `tests/phase2/`, `tests/phase3/`, `tests/phase4/`, and
-  `tests/phase5/` harnesses after changes.
+  `tests/phase1/`, `tests/phase2/`, `tests/phase3/`, `tests/phase4/`,
+  `tests/phase5/`, and `tests/phase6/` harnesses after changes.
 - Do not reintroduce arbitrary shell command evaluation into the task registry
   or GitHub Actions workflows.

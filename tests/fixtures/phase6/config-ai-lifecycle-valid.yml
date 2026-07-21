@@ -1,0 +1,106 @@
+sdlc_config_schema: 1
+stack:
+  languages: [shell]
+  frameworks: []
+  package_manager: none
+  package_manifest: none
+testing:
+  framework: smoke
+  directories:
+    - tests/
+validation:
+  required_tasks: [build, test]
+  optional_tasks: []
+  install_task: none
+  evidence_directory: .sdlc/evidence
+quality_security:
+  risk_profile: medium
+  required_test_layers: [unit, integration]
+  acceptance_mapping_required: true
+security:
+  review_required: true
+  tasks: [security_tests]
+  blocking_severities: [critical, high]
+ai_lifecycle:
+  enabled: true
+  risk_tier: high
+  risk_owner: product-owner
+  intended_uses: [assisted_research]
+  prohibited_uses: [autonomous_decisions]
+  affected_communities: [end_users]
+  applicable_laws: [privacy_policy]
+  human_oversight: named_reviewer
+  contestability: user_appeal
+  impact_assessment_path: docs/ai-impact-assessment.md
+  inventory_path: docs/ai-system-inventory.md
+  evaluation_plan_path: docs/ai-evaluation-plan.md
+  evaluation_report_path: .sdlc/evidence/ai-evaluation.json
+  risk_disposition_path: docs/ai-risk-disposition.md
+  red_team_plan_path: docs/ai-red-team-plan.md
+  runtime_controls_path: docs/ai-runtime-controls.md
+  monitoring_plan_path: docs/ai-production-monitoring.md
+  rollback_plan_path: docs/ai-rollback-plan.md
+  decommissioning_plan_path: docs/ai-decommissioning-plan.md
+  model_card_path: docs/ai-model-card.md
+  system_card_path: docs/ai-system-card.md
+  model_providers: [github]
+  models: [GPT-5]
+  prompt_versions: [prompt-v1]
+  system_instruction_versions: [system-v1]
+  tools: [search]
+  retrieval_sources: [internal_docs]
+  embeddings: [embedding-v1]
+  datasets: [synthetic]
+  evaluation_datasets: [representative-v1]
+  safety_filters: [content-filter-v1]
+  fallback_behavior: human_escalation
+  material_change_triggers: [model_change, prompt_change, retrieval_change, tool_change, safety_policy_change]
+  required_metrics: [task_quality, safety_rate, latency, cost, drift]
+  alert_thresholds: [quality_threshold, safety_event, cost_budget]
+  monitoring_cadence: weekly
+  reevaluation_cadence: every_release
+  retention_days: 90
+  require_red_team: true
+  require_production_exercise: true
+  tool_authorization_required: true
+  least_privilege_required: true
+  rate_limit_required: true
+  cost_limit_required: true
+  input_validation_required: true
+  output_validation_required: true
+  safety_filter_required: true
+  pii_handling_required: true
+  audit_log_required: true
+  human_escalation_required: true
+  kill_switch_required: true
+  safe_fallback_required: true
+  evaluation_task: ai_evaluation
+  red_team_task: ai_red_team
+  production_exercise_task: ai_production_exercise
+  rollback_task: ai_rollback
+  decommission_task: ai_decommission
+tasks:
+  build:
+    executable: bash
+    args: [--version]
+  test:
+    executable: bash
+    args: [--version]
+  security_tests:
+    executable: bash
+    args: [-c, "printf security-pass"]
+  ai_evaluation:
+    executable: bash
+    args: [-c, "printf ai-evaluation-pass"]
+  ai_red_team:
+    executable: bash
+    args: [-c, "printf ai-red-team-pass"]
+  ai_production_exercise:
+    executable: bash
+    args: [-c, "printf ai-production-exercise-pass"]
+  ai_rollback:
+    executable: bash
+    args: [-c, "printf ai-rollback-pass"]
+  ai_decommission:
+    executable: bash
+    args: [-c, "printf ai-decommission-pass"]

@@ -47,6 +47,9 @@ extensions:
   ai-governance:
     path: extensions/ai-governance
     description: AI-assisted development policy, least-privilege permissions, prompt-injection resistance, audit ledger, and agent evaluation controls.
+  ai-lifecycle:
+    path: extensions/ai-lifecycle
+    description: AI product impact assessment, inventory, evaluation, red-team, runtime safety, monitoring, rollback, and decommissioning controls.
 
 ownership:
   template_owned:

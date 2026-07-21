@@ -97,7 +97,8 @@ Copilot-SDLC-Demo/
 │     ├─ github-actions/
 │     ├─ release-assurance/
 │     ├─ operational-readiness/
-│     └─ ai-governance/
+│     ├─ ai-governance/
+│     └─ ai-lifecycle/
 ├─ tools/
 │  ├─ scaffold-sdlc.ps1             <- Windows/PowerShell installer
 │  └─ scaffold-sdlc.sh              <- Bash installer
@@ -110,6 +111,7 @@ Copilot-SDLC-Demo/
 ├─ tests/phase3/                    <- release assurance harnesses
 ├─ tests/phase4/                    <- operational readiness harnesses
 ├─ tests/phase5/                    <- AI governance harnesses
+├─ tests/phase6/                    <- AI product lifecycle harnesses
 ├─ .github/copilot-instructions.md  <- authoring-repository rules
 ├─ README.md                        <- this file
 └─ LICENSE
@@ -173,6 +175,9 @@ folder:
 
 # Add AI-assisted development governance and audit controls
 ./tools/scaffold-sdlc.ps1 -Target ../my-project -Extension ai-governance
+
+# Add lifecycle controls for an AI-enabled product
+./tools/scaffold-sdlc.ps1 -Target ../my-project -Extension ai-lifecycle
 ```
 
 ```bash
@@ -193,6 +198,9 @@ folder:
 
 # Add AI-assisted development governance and audit controls
 ./tools/scaffold-sdlc.sh ../my-project --extension ai-governance
+
+# Add lifecycle controls for an AI-enabled product
+./tools/scaffold-sdlc.sh ../my-project --extension ai-lifecycle
 ```
 
 The installers discover files under `template/base` and selected extension
@@ -222,6 +230,17 @@ agent-mediated change with `record-ai-change.ps1` or `.sh`; restricted actions
 and approved final dispositions require a human approval record. Run
 `scripts/run-ai-governance.ps1 -RecordSpec` or
 `scripts/run-ai-governance.sh --record-spec` before handoff.
+
+When the `ai-lifecycle` extension is enabled, configure the AI impact
+assessment, versioned system inventory, evaluation and red-team plans, risk
+disposition, runtime controls, monitoring, rollback, and decommissioning
+documents. Configure `ai_evaluation`, `ai_red_team`, and
+`ai_production_exercise` as structured tasks, then run
+`scripts/validate-ai-lifecycle.ps1` or `.sh` and
+`scripts/run-ai-lifecycle.ps1 -RecordSpec` or
+`scripts/run-ai-lifecycle.sh --record-spec`. The lifecycle gate records
+evaluation, red-team, and production-exercise evidence and blocks on failed
+quality or safety tasks.
 
 ### Use a repository URL with an agent
 

@@ -480,6 +480,20 @@ functions: Govern, Map, Measure, and Manage. Use the
 to define the threat and test catalog. These references guide risk-based
 implementation; they do not by themselves grant compliance certification.
 
+### Implemented Surfaces
+
+| Area | Implemented surface |
+|---|---|
+| Configuration | `ai_lifecycle` contract in `template/base/.github/sdlc-config.yml`, lifecycle task IDs, and revision-bound fields in `docs/spec.md` |
+| Lifecycle extension | `template/extensions/ai-lifecycle/` |
+| Impact and inventory | Impact assessment, versioned AI system inventory, risk disposition, model card, and system card templates |
+| Evaluation and red teaming | Evaluation plan, adversarial scenario catalog, configured evaluation/red-team tasks, and release-blocking evidence |
+| Runtime and operations | Runtime control, production monitoring, rollback, and decommissioning plans with required safety controls |
+| Config validation | `scripts/validate-ai-lifecycle.ps1` and `.sh` |
+| Lifecycle gate | `scripts/run-ai-lifecycle.ps1` and `.sh` with evaluation, red-team, production-exercise, and `gate_ai_lifecycle_*` evidence |
+| Automation | Scheduled/manual `ai-lifecycle.yml` with retained evidence |
+| Regression coverage | `tests/fixtures/phase6/` and `tests/phase6/` |
+
 ## Phase 7: Measurement and Continuous Improvement
 
 ### Objective

@@ -165,6 +165,10 @@ AI_GOVERNANCE_ENABLED=false
 if [[ -f "$CONFIG_PATH" ]] && awk '/^ai_governance:[[:space:]]*$/{found=1; next} found && /^[^[:space:]]/{exit} found && /^[[:space:]]+enabled:[[:space:]]*true[[:space:]]*$/{print "true"; exit}' "$CONFIG_PATH" | grep -q true; then
     AI_GOVERNANCE_ENABLED=true
 fi
+AI_LIFECYCLE_ENABLED=false
+if [[ -f "$CONFIG_PATH" ]] && awk '/^ai_lifecycle:[[:space:]]*$/{found=1; next} found && /^[^[:space:]]/{exit} found && /^[[:space:]]+enabled:[[:space:]]*true[[:space:]]*$/{print "true"; exit}' "$CONFIG_PATH" | grep -q true; then
+    AI_LIFECYCLE_ENABLED=true
+fi
 
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 if [[ -z "$BACKUP_PATH" ]]; then
@@ -228,6 +232,7 @@ metadata+="current_phase: $CURRENT_PHASE\n"
 metadata+="design_required: $DESIGN_REQUIRED\n"
 metadata+="deployment_readiness_enabled: $DEPLOYMENT_READINESS_ENABLED\n"
 metadata+="ai_governance_enabled: $AI_GOVERNANCE_ENABLED\n"
+metadata+="ai_lifecycle_enabled: $AI_LIFECYCLE_ENABLED\n"
 metadata+='security_gate_enabled: false\n'
 metadata+="review_cycle: $REVIEW_CYCLE\n"
 metadata+='revision_commit_sha: ""\n'
@@ -246,7 +251,7 @@ else
     done
 fi
 metadata+='approved_globs: []\n'
-for gate in requirements config install design planning build security review test lint type_check package deploy sbom smoke_test rollback release deployment_readiness ai_governance; do
+for gate in requirements config install design planning build security review test lint type_check package deploy sbom smoke_test rollback release deployment_readiness ai_governance ai_lifecycle; do
     metadata+="gate_${gate}_command: \"\"\n"
     metadata+="gate_${gate}_commit_sha: \"\"\n"
     metadata+="gate_${gate}_tree_digest: \"\"\n"

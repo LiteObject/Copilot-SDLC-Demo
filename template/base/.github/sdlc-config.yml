@@ -144,6 +144,66 @@ ai_governance:
   untrusted_input_policy: treat_as_data
   evaluation_task: agent_evaluation
 
+# Opt-in lifecycle controls for products that expose or depend on AI.
+ai_lifecycle:
+  enabled: false
+  risk_tier: low  # low | medium | high | critical
+  risk_owner: ""
+  intended_uses: []
+  prohibited_uses: []
+  affected_communities: []
+  applicable_laws: []
+  human_oversight: ""
+  contestability: ""
+  impact_assessment_path: docs/ai-impact-assessment.md
+  inventory_path: docs/ai-system-inventory.md
+  evaluation_plan_path: docs/ai-evaluation-plan.md
+  evaluation_report_path: .sdlc/evidence/ai-evaluation.json
+  risk_disposition_path: docs/ai-risk-disposition.md
+  red_team_plan_path: docs/ai-red-team-plan.md
+  runtime_controls_path: docs/ai-runtime-controls.md
+  monitoring_plan_path: docs/ai-production-monitoring.md
+  rollback_plan_path: docs/ai-rollback-plan.md
+  decommissioning_plan_path: docs/ai-decommissioning-plan.md
+  model_card_path: docs/ai-model-card.md
+  system_card_path: docs/ai-system-card.md
+  model_providers: []
+  models: []
+  prompt_versions: []
+  system_instruction_versions: []
+  tools: []
+  retrieval_sources: []
+  embeddings: []
+  datasets: []
+  evaluation_datasets: []
+  safety_filters: []
+  fallback_behavior: ""
+  material_change_triggers: []
+  required_metrics: []
+  alert_thresholds: []
+  monitoring_cadence: ""
+  reevaluation_cadence: ""
+  retention_days: 90
+  require_red_team: true
+  require_production_exercise: true
+  tool_authorization_required: true
+  least_privilege_required: true
+  rate_limit_required: true
+  cost_limit_required: true
+  input_validation_required: true
+  output_validation_required: true
+  safety_filter_required: true
+  pii_handling_required: true
+  audit_log_required: true
+  human_escalation_required: true
+  kill_switch_required: true
+  safe_fallback_required: true
+  evaluation_task: ai_evaluation
+  red_team_task: ai_red_team
+  production_exercise_task: ai_production_exercise
+  rollback_task: ai_rollback
+  decommission_task: ai_decommission
+
 # Structured argv only. The runner invokes executable with args directly; it
 # never evaluates a shell command string.
 tasks:
@@ -168,6 +228,21 @@ tasks:
 #  agent_evaluation:
 #    executable: python
 #    args: [scripts/agent-evaluation.py]
+#  ai_evaluation:
+#    executable: python
+#    args: [scripts/ai-evaluation.py]
+#  ai_red_team:
+#    executable: python
+#    args: [scripts/ai-red-team.py]
+#  ai_production_exercise:
+#    executable: python
+#    args: [scripts/ai-production-exercise.py]
+#  ai_rollback:
+#    executable: python
+#    args: [scripts/ai-rollback.py]
+#  ai_decommission:
+#    executable: python
+#    args: [scripts/ai-decommission.py]
 
 # Security task examples. Add the selected IDs to security.tasks and configure
 # each executable/args record. Reports should emit severity-bearing lines or

@@ -15,7 +15,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('install', 'build', 'test', 'lint', 'type_check', 'sast', 'secrets', 'dependency_audit', 'license_audit', 'container_scan', 'iac_scan', 'dast', 'security_tests', 'package', 'sbom', 'sign', 'verify_signature', 'deploy', 'smoke_test', 'rollback', 'health_check', 'telemetry_check', 'failure_drill', 'post_release_check', 'agent_evaluation', 'all')]
+    [ValidateSet('install', 'build', 'test', 'lint', 'type_check', 'sast', 'secrets', 'dependency_audit', 'license_audit', 'container_scan', 'iac_scan', 'dast', 'security_tests', 'package', 'sbom', 'sign', 'verify_signature', 'deploy', 'smoke_test', 'rollback', 'health_check', 'telemetry_check', 'failure_drill', 'post_release_check', 'agent_evaluation', 'ai_evaluation', 'ai_red_team', 'ai_production_exercise', 'ai_rollback', 'ai_decommission', 'all')]
     [string] $Task = 'all',
     [string] $ConfigPath,
     [string] $RepoRoot,

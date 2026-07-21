@@ -1,0 +1,31 @@
+name: Phase 6 Validation
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    bash:
+        name: Bash Phase 6 regression suite
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+            - name: Run Bash regression suite
+              shell: bash
+              run: bash tests/phase6/run-tests.sh
+
+    powershell:
+        name: PowerShell Phase 6 regression suite
+        runs-on: windows-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+            - name: Run PowerShell regression suite
+              shell: pwsh
+              run: ./tests/phase6/run-tests.ps1

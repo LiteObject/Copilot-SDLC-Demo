@@ -1,143 +1,145 @@
 name: Release Assurance
 
 on:
-    pull_request:
-    push:
-        tags:
-            - "v*"
-    workflow_dispatch:
+  pull_request:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
 
 permissions:
-    contents: read
-    id-token: write
-    attestations: write
+  contents: read
+  id-token: write
+  attestations: write
 
 jobs:
-    validate:
-        name: Validate release contract
-        runs-on: ubuntu-latest
-        outputs:
-            enabled: "${{ steps.release-config.outputs.enabled }}"
-        steps:
-            - name: Checkout
-              uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+  validate:
+    name: Validate release contract
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: "${{ steps.release-config.outputs.enabled }}"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-            - name: Detect and validate release assurance
-              id: release-config
-              shell: bash
-              run: |
-                  enabled=false
-                  if awk '/^release_assurance:/{found=1; next} found && /^[^[:space:]]/{exit} found && /enabled:[[:space:]]*true/{enabled=1} END { if (enabled) print "true" }' .github/sdlc-config.yml | grep -q true; then
-                    enabled=true
-                    bash scripts/validate-release-config.sh
-                  fi
-                  echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+      - name: Detect and validate release assurance
+        id: release-config
+        shell: bash
+        run: |
+          enabled=false
+          if awk '/^release_assurance:/{found=1; next} found && /^[^[:space:]]/{exit} found && /enabled:[[:space:]]*true/{enabled=1} END { if (enabled) print "true" }' .github/sdlc-config.yml | grep -q true; then
+            enabled=true
+            bash scripts/validate-release-config.sh
+          fi
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
 
-            - name: Run configured validation tasks
-              if: steps.release-config.outputs.enabled == 'true'
-              shell: bash
-              run: bash scripts/run-sdlc-task.sh --task all --record-spec
+      - name: Run configured validation tasks
+        if: steps.release-config.outputs.enabled == 'true'
+        shell: bash
+        run: bash scripts/run-sdlc-task.sh --task all --record-spec
 
-            - name: Run configured security policy
-              if: steps.release-config.outputs.enabled == 'true'
-              shell: bash
-              run: bash scripts/run-security-scans.sh --record-spec
+      - name: Run configured security policy
+        if: steps.release-config.outputs.enabled == 'true'
+        shell: bash
+        run: bash scripts/run-security-scans.sh --record-spec
 
-            - name: Prepare release bundle
-              if: steps.release-config.outputs.enabled == 'true'
-              shell: bash
-              run: bash scripts/prepare-release.sh --record-spec
+      - name: Prepare release bundle
+        if: steps.release-config.outputs.enabled == 'true'
+        shell: bash
+        run: bash scripts/prepare-release.sh --record-spec
 
-            - name: Verify release bundle
-              if: steps.release-config.outputs.enabled == 'true'
-              shell: bash
-              run: bash scripts/verify-release.sh
+      - name: Verify release bundle
+        if: steps.release-config.outputs.enabled == 'true'
+        shell: bash
+        run: bash scripts/verify-release.sh
 
-            - name: Upload release evidence
-              if: always() && steps.release-config.outputs.enabled == 'true'
-              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-              with:
-                  name: release-evidence-${{ github.run_id }}
-                  path: |
-                      .sdlc/evidence/
-                      .sdlc/release/
-                  if-no-files-found: warn
+      - name: Upload release evidence
+        if: always() && steps.release-config.outputs.enabled == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-evidence-${{ github.run_id }}
+          path: |
+            .sdlc/evidence/
+            .sdlc/release/
+          if-no-files-found: warn
 
-    build-release:
-        name: Build immutable release
-        if: ${{ needs.validate.outputs.enabled == 'true' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
-        needs: validate
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout
-              uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+  build-release:
+    name: Build immutable release
+    if: ${{ needs.validate.outputs.enabled == 'true' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-            - name: Rebuild and verify release bundle
-              shell: bash
-              run: |
-                  bash scripts/run-sdlc-task.sh --task all --record-spec
-                  bash scripts/run-security-scans.sh --record-spec
-                  bash scripts/prepare-release.sh --record-spec
-                  bash scripts/verify-release.sh
+      - name: Rebuild and verify release bundle
+        shell: bash
+        run: |
+          bash scripts/run-sdlc-task.sh --task all --record-spec
+          bash scripts/run-security-scans.sh --record-spec
+          bash scripts/prepare-release.sh --record-spec
+          bash scripts/verify-release.sh
 
-            - name: Attest artifact provenance
-              uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.2.3
-              with:
-                  subject-path: .sdlc/release/artifact.tar.gz
+      - name: Attest artifact provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.2.3
+        with:
+          subject-path: .sdlc/release/artifact.tar.gz
 
-            - name: Upload immutable release bundle
-              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-              with:
-                  name: release-bundle-${{ github.sha }}
-                  path: |
-                      .sdlc/release/
-                      .sdlc/evidence/
-                  if-no-files-found: error
+      - name: Upload immutable release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-bundle-${{ github.sha }}
+          path: |
+            .sdlc/release/
+            .sdlc/evidence/
+          if-no-files-found: error
 
-    promote-staging:
-        name: Promote to staging
-        if: ${{ needs.validate.outputs.enabled == 'true' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
-        needs: build-release
-        runs-on: ubuntu-latest
-        environment: staging
-        steps:
-            - name: Checkout
-              uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-            - name: Download release bundle
-              uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-              with:
-                  name: release-bundle-${{ github.sha }}
-                  path: .
-            - name: Verify release bundle
-              shell: bash
-              run: bash scripts/verify-release.sh
-            - name: Deploy to staging
-              shell: bash
-              run: bash scripts/run-sdlc-task.sh --task deploy --record-spec
-            - name: Run staging smoke test
-              shell: bash
-              run: bash scripts/run-sdlc-task.sh --task smoke_test --record-spec
+  promote-staging:
+    name: Promote to staging
+    if: ${{ needs.validate.outputs.enabled == 'true' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
+    needs: [validate, build-release]
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Download release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-bundle-${{ github.sha }}
+          path: .
+      - name: Verify release bundle
+        shell: bash
+        run: bash scripts/verify-release.sh
+      - name: Deploy to staging
+        shell: bash
+        run: bash scripts/run-sdlc-task.sh --task deploy --record-spec
+      - name: Run staging smoke test
+        shell: bash
+        run: bash scripts/run-sdlc-task.sh --task smoke_test --record-spec
 
-    promote-production:
-        name: Promote to production
-        if: ${{ needs.validate.outputs.enabled == 'true' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
-        needs: promote-staging
-        runs-on: ubuntu-latest
-        environment: production
-        steps:
-            - name: Checkout
-              uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-            - name: Download release bundle
-              uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-              with:
-                  name: release-bundle-${{ github.sha }}
-                  path: .
-            - name: Verify release bundle
-              shell: bash
-              run: bash scripts/verify-release.sh
-            - name: Deploy to production
-              shell: bash
-              run: bash scripts/run-sdlc-task.sh --task deploy --record-spec
-            - name: Run production smoke test
-              shell: bash
-              run: bash scripts/run-sdlc-task.sh --task smoke_test --record-spec
+  promote-production:
+    name: Promote to production
+    if: ${{ needs.validate.outputs.enabled == 'true' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
+    needs: [validate, promote-staging]
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Download release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-bundle-${{ github.sha }}
+          path: .
+      - name: Verify release bundle
+        shell: bash
+        run: bash scripts/verify-release.sh
+      - name: Deploy to production
+        shell: bash
+        run: bash scripts/run-sdlc-task.sh --task deploy --record-spec
+      - name: Run production smoke test
+        shell: bash
+        run: bash scripts/run-sdlc-task.sh --task smoke_test --record-spec
