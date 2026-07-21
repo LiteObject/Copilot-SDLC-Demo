@@ -204,6 +204,29 @@ ai_lifecycle:
   rollback_task: ai_rollback
   decommission_task: ai_decommission
 
+# Opt-in measurement and continuous-improvement controls for every project.
+measurement:
+  enabled: false
+  owner: ""
+  cadence: quarterly
+  retention_days: 365
+  measurement_plan_path: docs/measurement-plan.md
+  baseline_path: docs/measurement-baseline.md
+  metric_catalog_path: docs/measurement-metrics.md
+  privacy_review_path: docs/measurement-privacy-review.md
+  improvement_log_path: docs/continuous-improvement-log.md
+  quarterly_review_path: docs/quarterly-process-review.md
+  snapshot_path: .sdlc/evidence/measurement-snapshot.json
+  baseline_task: measurement_baseline
+  snapshot_task: measurement_snapshot
+  review_task: measurement_review
+  baseline_metrics: [lead_time, deployment_frequency, change_failure_rate, recovery_time, escaped_defects, security_findings, review_cycle_count, flaky_test_rate, rollback_rate]
+  delivery_metrics: [complete_evidence_rate, agent_suggested_defect_rate, human_rework, review_acceptance_rate, scope_drift_rate, validation_pass_rate, model_tool_policy_violations]
+  ai_product_metrics_applicable: false
+  ai_product_metrics: [task_quality, safety_rate, abstention_escalation_rate, user_reported_harms, cost, latency, drift, incident_recurrence]
+  phase_outcome_metrics: [phase0_outcome, phase1_outcome, phase2_outcome, phase3_outcome, phase4_outcome, phase5_outcome, phase6_outcome, phase7_outcome]
+  phase_leading_indicators: [phase0_leading_indicator, phase1_leading_indicator, phase2_leading_indicator, phase3_leading_indicator, phase4_leading_indicator, phase5_leading_indicator, phase6_leading_indicator, phase7_leading_indicator]
+
 # Structured argv only. The runner invokes executable with args directly; it
 # never evaluates a shell command string.
 tasks:
@@ -243,6 +266,15 @@ tasks:
 #  ai_decommission:
 #    executable: python
 #    args: [scripts/ai-decommission.py]
+#  measurement_baseline:
+#    executable: python
+#    args: [scripts/measurement-baseline.py]
+#  measurement_snapshot:
+#    executable: python
+#    args: [scripts/measurement-snapshot.py]
+#  measurement_review:
+#    executable: python
+#    args: [scripts/measurement-review.py]
 
 # Security task examples. Add the selected IDs to security.tasks and configure
 # each executable/args record. Reports should emit severity-bearing lines or

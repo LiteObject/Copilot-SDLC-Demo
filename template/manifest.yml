@@ -50,6 +50,9 @@ extensions:
   ai-lifecycle:
     path: extensions/ai-lifecycle
     description: AI product impact assessment, inventory, evaluation, red-team, runtime safety, monitoring, rollback, and decommissioning controls.
+  measurement:
+    path: extensions/measurement
+    description: Outcome measurement, metric ownership, privacy review, continuous-improvement evidence, and quarterly process review.
 
 ownership:
   template_owned:

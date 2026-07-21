@@ -75,8 +75,8 @@ The current implementation is a lightweight, human-supervised AI-assisted SDLC
 template. [docs/roadmap.md](docs/roadmap.md) defines the dependency-ordered work
 needed to add enforceable workflow gates, wider quality and security validation,
 release and operational controls, and lifecycle controls needed when the product
-itself uses AI. Phases 0 through 5 are implemented; Phases 6 and 7 remain
-proposed.
+itself uses AI. Phases 0 through 7 are implemented; Phases 6 and 7 remain
+opt-in where their product or process controls apply.
 
 ## Repository layout
 
@@ -98,7 +98,8 @@ Copilot-SDLC-Demo/
 │     ├─ release-assurance/
 │     ├─ operational-readiness/
 │     ├─ ai-governance/
-│     └─ ai-lifecycle/
+│     ├─ ai-lifecycle/
+│     └─ measurement/
 ├─ tools/
 │  ├─ scaffold-sdlc.ps1             <- Windows/PowerShell installer
 │  └─ scaffold-sdlc.sh              <- Bash installer
@@ -112,6 +113,7 @@ Copilot-SDLC-Demo/
 ├─ tests/phase4/                    <- operational readiness harnesses
 ├─ tests/phase5/                    <- AI governance harnesses
 ├─ tests/phase6/                    <- AI product lifecycle harnesses
+├─ tests/phase7/                    <- measurement and continuous-improvement harnesses
 ├─ .github/copilot-instructions.md  <- authoring-repository rules
 ├─ README.md                        <- this file
 └─ LICENSE
@@ -178,6 +180,9 @@ folder:
 
 # Add lifecycle controls for an AI-enabled product
 ./tools/scaffold-sdlc.ps1 -Target ../my-project -Extension ai-lifecycle
+
+# Add outcome measurement and continuous-improvement controls
+./tools/scaffold-sdlc.ps1 -Target ../my-project -Extension measurement
 ```
 
 ```bash
@@ -201,6 +206,9 @@ folder:
 
 # Add lifecycle controls for an AI-enabled product
 ./tools/scaffold-sdlc.sh ../my-project --extension ai-lifecycle
+
+# Add outcome measurement and continuous-improvement controls
+./tools/scaffold-sdlc.sh ../my-project --extension measurement
 ```
 
 The installers discover files under `template/base` and selected extension
@@ -241,6 +249,16 @@ documents. Configure `ai_evaluation`, `ai_red_team`, and
 `scripts/run-ai-lifecycle.sh --record-spec`. The lifecycle gate records
 evaluation, red-team, and production-exercise evidence and blocks on failed
 quality or safety tasks.
+
+When the `measurement` extension is enabled, configure a named measurement
+owner, fixed cadence, baseline and delivery metrics, roadmap outcome and
+leading-indicator metrics, retention, privacy review, and the
+`measurement_baseline`, `measurement_snapshot`, and `measurement_review` tasks.
+Run `scripts/validate-measurement.ps1` or `.sh`, then
+`scripts/run-measurement.ps1 -RecordSpec` or
+`scripts/run-measurement.sh --record-spec`. Store aggregate snapshots only;
+exclude unnecessary personal or sensitive content. The gate retains the task
+evidence and quarterly process-review record under `.sdlc/evidence/`.
 
 ### Use a repository URL with an agent
 

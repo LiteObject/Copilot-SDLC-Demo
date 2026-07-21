@@ -6,6 +6,7 @@ deployment_readiness_enabled: false
 operational_readiness_enabled: false
 ai_governance_enabled: false
 ai_lifecycle_enabled: false
+measurement_enabled: false
 security_gate_enabled: false
 review_cycle: 0
 revision_commit_sha: ""
@@ -192,6 +193,13 @@ gate_ai_lifecycle_timestamp: ""
 gate_ai_lifecycle_exit_code: ""
 gate_ai_lifecycle_result: NOT_RUN
 gate_ai_lifecycle_evidence: ""
+gate_measurement_command: ""
+gate_measurement_commit_sha: ""
+gate_measurement_tree_digest: ""
+gate_measurement_timestamp: ""
+gate_measurement_exit_code: ""
+gate_measurement_result: NOT_RUN
+gate_measurement_evidence: ""
 ---
 
 # Project Spec

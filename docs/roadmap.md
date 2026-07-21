@@ -1,6 +1,6 @@
 # Future Implementation Roadmap
 
-> Status: Phases 0-5 implemented; Phases 6-7 proposed
+> Status: Phases 0-7 implemented
 >
 > Scope: This roadmap describes future work that turns the current Copilot-native
 > SDLC template into a more enforceable software-delivery process. Phases are
@@ -496,6 +496,11 @@ implementation; they do not by themselves grant compliance certification.
 
 ## Phase 7: Measurement and Continuous Improvement
 
+> Implementation status: complete. The opt-in measurement extension validates
+> named metric ownership, definitions, sources, retention, privacy review, and
+> roadmap coverage; runs baseline, snapshot, and review tasks; retains
+> machine-readable evidence; and provides quarterly automation.
+
 ### Objective
 
 Improve the process using delivery outcomes, quality, safety, and user impact
@@ -525,6 +530,19 @@ rather than measuring agent activity or code volume.
 - Each roadmap phase has at least one outcome measure and one leading indicator.
 - Process changes are accepted only after documenting the observed effect and
   any regressions.
+
+### Implemented Surfaces
+
+| Area | Implemented surface |
+|---|---|
+| Configuration | `measurement` contract in `template/base/.github/sdlc-config.yml`, Phase 7 task IDs, and revision-bound fields in `docs/spec.md` |
+| Measurement extension | `template/extensions/measurement/` |
+| Metric governance | Baseline, delivery, AI-product, and roadmap outcome/leading-indicator catalogs with named ownership and privacy rules |
+| Continuous improvement | Improvement log and quarterly process-review templates with observed-effect and regression fields |
+| Config validation | `scripts/validate-measurement.ps1` and `.sh` |
+| Measurement gate | `scripts/run-measurement.ps1` and `.sh` with baseline, snapshot, review, and `gate_measurement_*` evidence |
+| Automation | Scheduled/manual `measurement.yml` with retained evidence |
+| Regression coverage | `tests/fixtures/phase7/` and `tests/phase7/` |
 
 ## Delivery Principles
 

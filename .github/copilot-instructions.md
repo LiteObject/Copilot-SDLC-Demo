@@ -30,6 +30,6 @@ consumer project.
 - Keep PowerShell and Bash validators, task runners, security/release scripts,
   and governance scripts behaviorally aligned; run `tests/phase0/`,
   `tests/phase1/`, `tests/phase2/`, `tests/phase3/`, `tests/phase4/`,
-  `tests/phase5/`, and `tests/phase6/` harnesses after changes.
+  `tests/phase5/`, `tests/phase6/`, and `tests/phase7/` harnesses after changes.
 - Do not reintroduce arbitrary shell command evaluation into the task registry
   or GitHub Actions workflows.

@@ -225,7 +225,7 @@ command_display() {
 PACKAGE_MANAGER="$(get_value stack.package_manager)"
 MANIFEST="$(get_value stack.package_manifest)"
 ALLOWED_PACKAGE_MANAGERS=(npm yarn pnpm pip poetry cargo dotnet go none)
-ALLOWED_TASKS=(install build test lint type_check sast secrets dependency_audit license_audit container_scan iac_scan dast security_tests package sbom sign verify_signature deploy smoke_test rollback health_check telemetry_check failure_drill post_release_check agent_evaluation ai_evaluation ai_red_team ai_production_exercise ai_rollback ai_decommission)
+ALLOWED_TASKS=(install build test lint type_check sast secrets dependency_audit license_audit container_scan iac_scan dast security_tests package sbom sign verify_signature deploy smoke_test rollback health_check telemetry_check failure_drill post_release_check agent_evaluation ai_evaluation ai_red_team ai_production_exercise ai_rollback ai_decommission measurement_baseline measurement_snapshot measurement_review)
 ALLOWED_TEST_LAYERS=(unit integration contract api e2e accessibility performance resilience fuzz property)
 ALLOWED_SEVERITIES=(critical high medium low info)
 
@@ -310,6 +310,7 @@ SECURITY_REVIEW_REQUIRED="$(get_value security.review_required)"
 [[ "$SECURITY_REVIEW_REQUIRED" == true || "$SECURITY_REVIEW_REQUIRED" == false ]] || add_error 'security.review_required must be true or false.'
 AI_GOVERNANCE_ENABLED="$(get_value ai_governance.enabled false)"
 AI_LIFECYCLE_ENABLED="$(get_value ai_lifecycle.enabled false)"
+MEASUREMENT_ENABLED="$(get_value measurement.enabled false)"
 get_list security.tasks
 SECURITY_TASKS=("${LIST_RESULT[@]}")
 get_list security.blocking_severities
@@ -455,6 +456,7 @@ if (( RECORD_SPEC == 1 )); then
     [[ "$SECURITY_REVIEW_REQUIRED" != true ]] || set_spec_field security_gate_enabled true
     [[ "$AI_GOVERNANCE_ENABLED" != true ]] || set_spec_field ai_governance_enabled true
     [[ "$AI_LIFECYCLE_ENABLED" != true ]] || set_spec_field ai_lifecycle_enabled true
+    [[ "$MEASUREMENT_ENABLED" != true ]] || set_spec_field measurement_enabled true
     echo "[INFO] Recorded gate_config_* in $SPEC_PATH"
 fi
 
