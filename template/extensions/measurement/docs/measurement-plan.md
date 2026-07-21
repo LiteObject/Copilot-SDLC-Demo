@@ -34,6 +34,17 @@ free-form user content, secrets, credentials, and unnecessary personal or
 sensitive data. Document any sampling, denominator, missing-value, or
 exclusion rule.
 
+The `measurement_snapshot` task must write the configured snapshot path as a
+JSON document with schema `1` and kind `sdlc-measurement-snapshot`. It must
+include the measurement period, owner, one numeric value and baseline value for
+each configured metric, metric definition, source, retention days, and privacy
+review status. It must also include an approved review with regression review
+and any accepted improvement's observed effect and evidence path.
+
+Set `measurement.require_completion_gate: true` only when the project wants
+measurement evidence required before the SDLC workflow reaches `DONE`. The
+normal quarterly cadence does not block every feature transition.
+
 For AI-enabled products, record task quality, safety rate, abstention or
 escalation rate, user-reported harms, cost, latency, drift, and incident
 recurrence. For conventional products, mark those metrics not applicable and

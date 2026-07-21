@@ -359,6 +359,20 @@ function Test-Phase2Config {
         return $config -match '(?ms)^release_assurance:\s*\r?\n(?:(?!^\S).)*?^\s*enabled:\s*true\s*$'
     }
 
+function Test-ConfigFlag {
+    param(
+        [string] $Root,
+        [string] $Section,
+        [string] $Field
+    )
+
+    $configPath = Join-Path $Root '.github/sdlc-config.yml'
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return $false }
+    $config = Get-Content -LiteralPath $configPath -Raw
+    $pattern = '(?ms)^' + [regex]::Escape($Section) + ':\s*\r?\n(?:(?!^\S).)*?^\s*' + [regex]::Escape($Field) + ':\s*true\s*$'
+    return $config -match $pattern
+}
+
 function Test-RequiredSections {
     param(
         [string] $Content,
@@ -606,6 +620,11 @@ $expectedTreeDigest = if ($TreeDigest) { $TreeDigest } else { Get-CurrentTreeDig
 $phase2Enabled = Test-Phase2Config -Root $RepoRoot
 $securityReviewRequired = $securityGateEnabled
 $releaseAssuranceEnabled = Test-ReleaseAssuranceEnabled -Root $RepoRoot
+$aiGovernanceEnabled = Test-ConfigFlag -Root $RepoRoot -Section 'ai_governance' -Field 'enabled'
+$operationalReadinessEnabled = Test-ConfigFlag -Root $RepoRoot -Section 'operational_readiness' -Field 'enabled'
+$aiLifecycleEnabled = Test-ConfigFlag -Root $RepoRoot -Section 'ai_lifecycle' -Field 'enabled'
+$measurementCompletionGateEnabled = (Test-ConfigFlag -Root $RepoRoot -Section 'measurement' -Field 'enabled') -and
+    (Test-ConfigFlag -Root $RepoRoot -Section 'measurement' -Field 'require_completion_gate')
 if ($releaseAssuranceEnabled -and $currentState -eq 'TESTING' -and $targetPhase -eq 'DONE') {
     if (-not (Test-GateRecord -Name 'release' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
 }
@@ -625,6 +644,7 @@ if ($currentState -eq 'PLANNING' -and $targetPhase -eq 'CODING') {
 if ($currentState -eq 'CODING' -and $targetPhase -eq 'REVIEW') {
     if (-not (Test-GateRecord -Name 'build' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
     if ($securityGateEnabled -and -not (Test-GateRecord -Name 'security' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+    if ($aiGovernanceEnabled -and -not (Test-GateRecord -Name 'ai_governance' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
     if (-not (Test-ConfiguredTaskGates -Root $RepoRoot -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -TargetPhase $targetPhase -CurrentState $currentState)) { $allPassed = $false }
 }
 if ($currentState -eq 'REVIEW' -and $targetPhase -eq 'CODING') {
@@ -649,6 +669,16 @@ if ($currentState -eq 'DEPLOYMENT_READINESS' -and $targetPhase -eq 'CODING') {
 if ($currentState -eq 'DEPLOYMENT_READINESS' -and $targetPhase -eq 'DONE') {
     if (-not (Test-GateRecord -Name 'deployment_readiness' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
         if ($releaseAssuranceEnabled -and -not (Test-GateRecord -Name 'release' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+}
+if (($currentState -eq 'TESTING' -and $targetPhase -eq 'DONE') -or
+    ($currentState -eq 'DEPLOYMENT_READINESS' -and $targetPhase -eq 'DONE')) {
+    $completionGates = @()
+    if ($operationalReadinessEnabled) { $completionGates += 'operational_readiness' }
+    if ($aiLifecycleEnabled) { $completionGates += 'ai_lifecycle' }
+    if ($measurementCompletionGateEnabled) { $completionGates += 'measurement' }
+    foreach ($gate in $completionGates) {
+        if (-not (Test-GateRecord -Name $gate -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
+    }
 }
 
 Write-Host "Checking phase prerequisites up to: $targetPhase (current state: $currentState)"

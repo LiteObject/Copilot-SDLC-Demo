@@ -225,6 +225,28 @@ release_assurance_enabled() {
     awk '/^release_assurance:[[:space:]]*$/{found=1; next} found && /^[^[:space:]]/{exit} found && /^[[:space:]]+enabled:[[:space:]]*true[[:space:]]*$/{enabled=1} END { exit(enabled ? 0 : 1) }' "$REPO_ROOT/.github/sdlc-config.yml"
 }
 
+config_flag_enabled() {
+    local section="$1" field="$2"
+    [[ -f "$REPO_ROOT/.github/sdlc-config.yml" ]] || return 1
+    awk -v section="$section" -v field="$field" '
+        $0 ~ "^" section ":[[:space:]]*$" { found = 1; next }
+        found && /^[^[:space:]]/ { exit }
+        found && $0 ~ "^[[:space:]]+" field ":[[:space:]]*true[[:space:]]*$" { enabled = 1 }
+        END { exit(enabled ? 0 : 1) }
+    ' "$REPO_ROOT/.github/sdlc-config.yml"
+}
+
+AI_GOVERNANCE_ENABLED=0
+config_flag_enabled ai_governance enabled && AI_GOVERNANCE_ENABLED=1
+OPERATIONAL_READINESS_ENABLED=0
+config_flag_enabled operational_readiness enabled && OPERATIONAL_READINESS_ENABLED=1
+AI_LIFECYCLE_ENABLED=0
+config_flag_enabled ai_lifecycle enabled && AI_LIFECYCLE_ENABLED=1
+MEASUREMENT_COMPLETION_GATE_ENABLED=0
+if config_flag_enabled measurement enabled && config_flag_enabled measurement require_completion_gate; then
+    MEASUREMENT_COMPLETION_GATE_ENABLED=1
+fi
+
 if [[ "$(meta_get last_transition_to)" != "$CURRENT_STATE" ]]; then
     echo "[FAIL] last_transition_to '$(meta_get last_transition_to)' does not match current_phase '$CURRENT_STATE'."
     exit 1
@@ -466,6 +488,14 @@ test_configured_task_gates() {
     return $((1 - passed))
 }
 
+test_completion_extension_gates() {
+    local passed=1
+    if (( OPERATIONAL_READINESS_ENABLED == 1 )); then test_gate operational_readiness PASS || passed=0; fi
+    if (( AI_LIFECYCLE_ENABLED == 1 )); then test_gate ai_lifecycle PASS || passed=0; fi
+    if (( MEASUREMENT_COMPLETION_GATE_ENABLED == 1 )); then test_gate measurement PASS || passed=0; fi
+    return $((1 - passed))
+}
+
 get_section_body() {
     local section="$1"
     awk -v section="$section" '
@@ -571,6 +601,7 @@ fi
 if [[ "$CURRENT_STATE" == 'CODING' && "$TARGET_PHASE" == 'REVIEW' ]]; then
     test_gate build PASS || ALL_PASSED=0
     [[ "$SECURITY_GATE_ENABLED" != 'true' ]] || test_gate security PASS || ALL_PASSED=0
+    (( AI_GOVERNANCE_ENABLED == 0 )) || test_gate ai_governance PASS || ALL_PASSED=0
     test_configured_task_gates "$TARGET_PHASE" "$CURRENT_STATE" || ALL_PASSED=0
 fi
 if [[ "$CURRENT_STATE" == 'REVIEW' && "$TARGET_PHASE" == 'CODING' ]]; then
@@ -595,6 +626,10 @@ fi
 if [[ "$CURRENT_STATE" == 'DEPLOYMENT_READINESS' && "$TARGET_PHASE" == 'DONE' ]]; then
     test_gate deployment_readiness PASS || ALL_PASSED=0
     if release_assurance_enabled; then test_gate release PASS || ALL_PASSED=0; fi
+fi
+if [[ "$CURRENT_STATE" == 'TESTING' && "$TARGET_PHASE" == 'DONE' ||
+      "$CURRENT_STATE" == 'DEPLOYMENT_READINESS' && "$TARGET_PHASE" == 'DONE' ]]; then
+    test_completion_extension_gates || ALL_PASSED=0
 fi
 
 if check_required_sections; then

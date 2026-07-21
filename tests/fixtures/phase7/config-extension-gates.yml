@@ -1,0 +1,9 @@
+ai_governance:
+  enabled: true
+operational_readiness:
+  enabled: true
+ai_lifecycle:
+  enabled: true
+measurement:
+  enabled: true
+  require_completion_gate: true

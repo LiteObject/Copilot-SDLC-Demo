@@ -136,3 +136,26 @@ Run `scripts/validate-ai-lifecycle.ps1` or `.sh`, then
 evaluation, red-team, and production-exercise tasks, writes
 `.sdlc/evidence/ai-lifecycle.json` and the configured evaluation report, and
 records `gate_ai_lifecycle_*` in `docs/spec.md`.
+
+## Measurement and Continuous Improvement
+
+For projects using the Phase 7 extension, set `measurement.enabled: true` and
+configure the named owner, cadence, retention, metric catalogs, privacy review,
+and `measurement_baseline`, `measurement_snapshot`, and `measurement_review`
+tasks. The snapshot task must write the configured JSON snapshot path using
+schema `1` and kind `sdlc-measurement-snapshot`; the runner validates every
+configured metric's value, baseline, definition, source, retention, owner, and
+privacy review, plus approved improvement and regression evidence.
+
+Run `scripts/validate-measurement.ps1` or `.sh`, then
+`scripts/run-measurement.ps1 -RecordSpec` or
+`scripts/run-measurement.sh --record-spec`. Python 3 is required by the
+snapshot validator; use `python` on Windows or `python3` on Bash systems for
+the configured snapshot task. Measurement is cadence-based by default. Set
+`measurement.require_completion_gate: true` only when the measurement gate
+must block the final transition to `DONE`.
+
+The core phase validator requires enabled AI governance before `CODING` hands
+off to `REVIEW`, and enabled operational-readiness or AI-lifecycle gates before
+`DONE`. Deployment readiness and release assurance remain opt-in, so a project
+without CI/CD deployment can use the direct `TESTING -> DONE` path.

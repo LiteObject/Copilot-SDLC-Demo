@@ -53,8 +53,8 @@ tasks:
     executable: bash
     args: [-c, "printf measurement-baseline-pass"]
   measurement_snapshot:
-    executable: bash
-    args: [-c, "printf measurement-snapshot-pass"]
+    executable: python
+    args: [scripts/write-measurement-snapshot.py]
   measurement_review:
     executable: bash
     args: [-c, "printf measurement-review-pass"]

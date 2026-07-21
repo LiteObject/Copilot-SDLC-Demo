@@ -98,6 +98,8 @@ $retention = 0
 if (-not [int]::TryParse((Get-MeasurementValue -Body $body -Name 'retention_days'), [ref]$retention) -or $retention -lt 1) { Add-MeasurementError $errors 'measurement.retention_days must be a positive integer.' }
 $aiApplicable = Get-MeasurementValue -Body $body -Name 'ai_product_metrics_applicable' -Default 'false'
 if ($aiApplicable -notin @('true', 'false')) { Add-MeasurementError $errors 'measurement.ai_product_metrics_applicable must be true or false.' }
+$requireCompletionGate = Get-MeasurementValue -Body $body -Name 'require_completion_gate' -Default 'false'
+if ($requireCompletionGate -notin @('true', 'false')) { Add-MeasurementError $errors 'measurement.require_completion_gate must be true or false.' }
 
 $requiredMetrics = [ordered]@{
     baseline_metrics = @('lead_time','deployment_frequency','change_failure_rate','recovery_time','escaped_defects','security_findings','review_cycle_count','flaky_test_rate','rollback_rate')
@@ -158,6 +160,7 @@ $record = [ordered]@{
     timestamp = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
     owner = Get-MeasurementValue -Body $body -Name 'owner'
     cadence = $cadence
+    require_completion_gate = $requireCompletionGate
     exit_code = if ($errors.Count -eq 0) { 0 } else { 1 }
     result = if ($errors.Count -eq 0) { 'PASS' } else { 'FAIL' }
     errors = @($errors)

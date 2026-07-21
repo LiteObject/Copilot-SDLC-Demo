@@ -258,7 +258,15 @@ Run `scripts/validate-measurement.ps1` or `.sh`, then
 `scripts/run-measurement.ps1 -RecordSpec` or
 `scripts/run-measurement.sh --record-spec`. Store aggregate snapshots only;
 exclude unnecessary personal or sensitive content. The gate retains the task
-evidence and quarterly process-review record under `.sdlc/evidence/`.
+evidence, validates the configured JSON snapshot, and retains the quarterly
+process-review record under `.sdlc/evidence/`. Set
+`measurement.require_completion_gate: true` only when measurement must block
+the final SDLC transition; the normal cadence does not block every feature.
+
+The core phase validator applies enabled extension gates at their relevant
+handoffs. Deployment readiness remains conditional: repositories and features
+without CI/CD deployment can keep it disabled and transition directly from
+`TESTING` to `DONE` after the applicable non-deployment gates pass.
 
 ### Use a repository URL with an agent
 

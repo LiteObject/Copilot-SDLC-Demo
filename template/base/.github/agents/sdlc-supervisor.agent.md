@@ -22,19 +22,25 @@ The legal transitions are:
 | `GATHERING_REQS` | `DESIGN` or `PLANNING` | Requirements gate `PASS`; `DESIGN` only when `design_required: true` |
 | `DESIGN` | `PLANNING` | Design gate `PASS` |
 | `PLANNING` | `CODING` | Planning gate `PASS` |
-| `CODING` | `REVIEW` | Build gate `PASS`; security gate `PASS` when enabled |
+| `CODING` | `REVIEW` | Build gate `PASS`; security gate `PASS` when enabled; AI-governance gate `PASS` when enabled |
 | `REVIEW` | `CODING` | Review `CHANGES_REQUESTED`; review cycle below 3 |
 | `REVIEW` | `TESTING` | Review `PASS`; review cycle reset to 0 |
 | `REVIEW` | `GATHERING_REQS` | Review `CHANGES_REQUESTED`; cycle is 3; escalation evidence exists |
 | `TESTING` | `CODING` | Test gate `FAIL` |
 | `TESTING` | `DEPLOYMENT_READINESS` | Test gate `PASS`; readiness enabled |
-| `TESTING` | `DONE` | Test gate `PASS`; readiness disabled |
+| `TESTING` | `DONE` | Test gate `PASS`; readiness disabled; enabled operational-readiness and AI-lifecycle gates `PASS`; measurement gate only when `measurement.require_completion_gate: true` |
 | `DEPLOYMENT_READINESS` | `CODING` | Readiness gate `FAIL` |
-| `DEPLOYMENT_READINESS` | `DONE` | Readiness gate `PASS` |
+| `DEPLOYMENT_READINESS` | `DONE` | Readiness gate `PASS`; enabled release, operational-readiness, AI-lifecycle, and opt-in measurement gates `PASS` |
 
 Before applying any transition, run `scripts/check-phase.ps1` on Windows or
 `scripts/check-phase.sh` elsewhere with the target phase. A worker result is
 not a transition and must not change the state file's workflow metadata.
+
+Deployment readiness is conditional. A project or feature that does not use
+deployment or CI/CD may keep `deployment_readiness_enabled: false` and use the
+direct `TESTING -> DONE` path. When an extension is enabled, its gate is still
+checked at the applicable handoff; measurement remains cadence-based unless the
+project explicitly enables `measurement.require_completion_gate`.
 
 ### Review Cycle Loop-Breaker
 

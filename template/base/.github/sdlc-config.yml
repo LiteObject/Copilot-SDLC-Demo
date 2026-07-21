@@ -207,6 +207,7 @@ ai_lifecycle:
 # Opt-in measurement and continuous-improvement controls for every project.
 measurement:
   enabled: false
+  require_completion_gate: false
   owner: ""
   cadence: quarterly
   retention_days: 365

@@ -58,6 +58,13 @@ function Get-RelativePath {
     $rootPath = (Resolve-Path -LiteralPath $Root).Path.TrimEnd([char[]]@('\','/')) + [System.IO.Path]::DirectorySeparatorChar
     return $Path.Substring($rootPath.Length) -replace '\\','/'
 }
+function Get-PythonExecutable {
+    foreach ($name in @('python', 'python3')) {
+        $command = Get-Command $name -ErrorAction SilentlyContinue
+        if ($null -ne $command) { return $command.Source }
+    }
+    return $null
+}
 function Set-SpecMetadata {
     param([string] $Path, [hashtable] $Updates)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Spec file not found for -RecordSpec: $Path" }
@@ -114,12 +121,57 @@ foreach ($field in $taskFields) {
 
 $recordDirectory = Join-Path $RepoRoot $EvidenceDirectory
 New-Item -ItemType Directory -Path $recordDirectory -Force | Out-Null
+$snapshotPath = Get-MeasurementValue -Body $body -Name 'snapshot_path'
+$snapshotValidationPath = Join-Path $recordDirectory 'measurement-snapshot-validation.json'
+$snapshotExitCode = 1
+$snapshotEvidence = ''
+if (-not (Test-SafeRelativePath $snapshotPath)) {
+    [void]$errors.Add("measurement.snapshot_path must be repository-relative: $snapshotPath")
+}
+else {
+    $snapshotFullPath = Join-Path $RepoRoot $snapshotPath
+    $python = Get-PythonExecutable
+    $snapshotValidator = Join-Path $PSScriptRoot 'validate-measurement-snapshot.py'
+    $expectedMetrics = New-Object System.Collections.Generic.List[string]
+    foreach ($name in @('baseline_metrics','delivery_metrics','phase_outcome_metrics','phase_leading_indicators')) {
+        foreach ($metric in @(Get-MeasurementList -Body $body -Name $name)) { [void]$expectedMetrics.Add($metric) }
+    }
+    if ((Get-MeasurementValue -Body $body -Name 'ai_product_metrics_applicable' -Default 'false') -eq 'true') {
+        foreach ($metric in @(Get-MeasurementList -Body $body -Name 'ai_product_metrics')) { [void]$expectedMetrics.Add($metric) }
+    }
+    if (-not $python) {
+        [void]$errors.Add('Python 3 is required to validate the measurement snapshot.')
+    }
+    elseif (-not (Test-Path -LiteralPath $snapshotValidator -PathType Leaf)) {
+        [void]$errors.Add("Measurement snapshot validator is missing: $snapshotValidator")
+    }
+    else {
+        $snapshotArguments = @(
+            $snapshotValidator,
+            '--snapshot-path', $snapshotFullPath,
+            '--repo-root', $RepoRoot,
+            '--owner', (Get-MeasurementValue -Body $body -Name 'owner'),
+            '--retention-days', (Get-MeasurementValue -Body $body -Name 'retention_days'),
+            '--validation-evidence-path', $snapshotValidationPath
+        )
+        foreach ($metric in $expectedMetrics) { $snapshotArguments += @('--metric', $metric) }
+        & $python @snapshotArguments
+        $snapshotExitCode = $LASTEXITCODE
+        if ($snapshotExitCode -ne 0) { [void]$errors.Add("Measurement snapshot validation failed with exit code $snapshotExitCode.") }
+    }
+    if (Test-Path -LiteralPath $snapshotFullPath -PathType Leaf) { $snapshotEvidence = Get-RelativePath -Root $RepoRoot -Path $snapshotFullPath }
+}
+$snapshotCheck = [ordered]@{
+    task = 'measurement_snapshot_schema'
+    purpose = 'snapshot_validation'
+    exit_code = $snapshotExitCode
+    result = if ($snapshotExitCode -eq 0) { 'PASS' } else { 'FAIL' }
+    evidence = if (Test-Path -LiteralPath $snapshotValidationPath -PathType Leaf) { Get-RelativePath -Root $RepoRoot -Path $snapshotValidationPath } else { '' }
+}
+[void]$checks.Add([pscustomobject]$snapshotCheck)
 $commitSha = Get-GitValue -Root $RepoRoot -Arguments @('rev-parse', 'HEAD')
 $treeDigest = Get-TreeDigest -Root $RepoRoot
 $checkedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
-$snapshotPath = Get-MeasurementValue -Body $body -Name 'snapshot_path'
-if (-not (Test-SafeRelativePath $snapshotPath)) { Write-Host "[FAIL] measurement.snapshot_path must be repository-relative: $snapshotPath"; exit 1 }
-$snapshotFullPath = Join-Path $RepoRoot $snapshotPath
 $result = if ($errors.Count -eq 0) { 'PASS' } else { 'FAIL' }
 $exitCode = if ($errors.Count -eq 0) { 0 } else { 1 }
 $record = [ordered]@{
@@ -131,7 +183,8 @@ $record = [ordered]@{
     commit_sha = $commitSha
     tree_digest = $treeDigest
     measured_at = $checkedAt
-    snapshot_evidence = if (Test-Path -LiteralPath $snapshotFullPath -PathType Leaf) { Get-RelativePath -Root $RepoRoot -Path $snapshotFullPath } else { '' }
+    snapshot_evidence = $snapshotEvidence
+    snapshot_validation_evidence = if (Test-Path -LiteralPath $snapshotValidationPath -PathType Leaf) { Get-RelativePath -Root $RepoRoot -Path $snapshotValidationPath } else { '' }
     metrics = [ordered]@{
         baseline = @(Get-MeasurementList -Body $body -Name 'baseline_metrics')
         delivery = @(Get-MeasurementList -Body $body -Name 'delivery_metrics')

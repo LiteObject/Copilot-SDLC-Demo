@@ -44,6 +44,11 @@ VALIDATOR="$SCRIPT_DIR/validate-measurement.sh"
 bash "$VALIDATOR" --config-path "$CONFIG_PATH" --repo-root "$REPO_ROOT" --evidence-directory "$EVIDENCE_DIRECTORY"
 RUNNER="$REPO_ROOT/scripts/run-sdlc-task.sh"
 [[ -f "$RUNNER" ]] || { echo "[FAIL] Task runner not found: $RUNNER"; exit 1; }
+PYTHON_EXECUTABLE=''
+for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then PYTHON_EXECUTABLE="$candidate"; break; fi
+done
+SNAPSHOT_VALIDATOR="$SCRIPT_DIR/validate-measurement-snapshot.py"
 
 ERRORS=()
 CHECKS_JSON=()
@@ -70,6 +75,40 @@ SNAPSHOT_EVIDENCE=''
 [[ -f "$REPO_ROOT/$SNAPSHOT_RELATIVE" ]] && SNAPSHOT_EVIDENCE="$SNAPSHOT_RELATIVE"
 RECORD_DIRECTORY="$REPO_ROOT/$EVIDENCE_DIRECTORY"
 mkdir -p "$RECORD_DIRECTORY"
+SNAPSHOT_VALIDATION_PATH="$RECORD_DIRECTORY/measurement-snapshot-validation.json"
+SNAPSHOT_EXIT_CODE=1
+EXPECTED_METRICS=()
+for field in baseline_metrics delivery_metrics phase_outcome_metrics phase_leading_indicators; do
+    get_list "$field"
+    EXPECTED_METRICS+=("${LIST_RESULT[@]}")
+done
+if [[ "$(get_value ai_product_metrics_applicable false)" == true ]]; then
+    get_list ai_product_metrics
+    EXPECTED_METRICS+=("${LIST_RESULT[@]}")
+fi
+if [[ -z "$PYTHON_EXECUTABLE" ]]; then
+    ERRORS+=("Python 3 is required to validate the measurement snapshot.")
+elif [[ ! -f "$SNAPSHOT_VALIDATOR" ]]; then
+    ERRORS+=("Measurement snapshot validator is missing: $SNAPSHOT_VALIDATOR")
+else
+    SNAPSHOT_ARGUMENTS=(
+        "$SNAPSHOT_VALIDATOR"
+        --snapshot-path "$REPO_ROOT/$SNAPSHOT_RELATIVE"
+        --repo-root "$REPO_ROOT"
+        --owner "$(get_value owner)"
+        --retention-days "$(get_value retention_days)"
+        --validation-evidence-path "$SNAPSHOT_VALIDATION_PATH"
+    )
+    for metric in "${EXPECTED_METRICS[@]}"; do SNAPSHOT_ARGUMENTS+=(--metric "$metric"); done
+    set +e
+    "$PYTHON_EXECUTABLE" "${SNAPSHOT_ARGUMENTS[@]}"
+    SNAPSHOT_EXIT_CODE=$?
+    set -e
+    if (( SNAPSHOT_EXIT_CODE != 0 )); then ERRORS+=("Measurement snapshot validation failed with exit code $SNAPSHOT_EXIT_CODE."); fi
+fi
+SNAPSHOT_VALIDATION_EVIDENCE=''
+[[ -f "$SNAPSHOT_VALIDATION_PATH" ]] && SNAPSHOT_VALIDATION_EVIDENCE="${SNAPSHOT_VALIDATION_PATH:${#REPO_ROOT}}" && SNAPSHOT_VALIDATION_EVIDENCE="${SNAPSHOT_VALIDATION_EVIDENCE#/}"
+CHECKS_JSON+=("$(printf '{\"task\":\"measurement_snapshot_schema\",\"purpose\":\"snapshot_validation\",\"exit_code\":%d,\"result\":%s,\"evidence\":%s}' "$SNAPSHOT_EXIT_CODE" "$(if (( SNAPSHOT_EXIT_CODE == 0 )); then json_escape PASS; else json_escape FAIL; fi)" "$(json_escape "$SNAPSHOT_VALIDATION_EVIDENCE")")")
 COMMIT_SHA="$(get_commit_sha)"
 TREE_DIGEST="$(get_tree_digest)"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -85,7 +124,7 @@ get_list ai_product_metrics; AI_JSON="$(json_array "${LIST_RESULT[@]}")"
 get_list phase_outcome_metrics; OUTCOME_JSON="$(json_array "${LIST_RESULT[@]}")"
 get_list phase_leading_indicators; LEADING_JSON="$(json_array "${LIST_RESULT[@]}")"
 {
-    printf '{"schema":1,"kind":"sdlc-measurement","command":"scripts/run-measurement.sh","owner":'; json_escape "$(get_value owner)"; printf ',"cadence":'; json_escape "$(get_value cadence)"; printf ',"commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"tree_digest":'; json_escape "$TREE_DIGEST"; printf ',"measured_at":'; json_escape "$TIMESTAMP"; printf ',"snapshot_evidence":'; json_escape "$SNAPSHOT_EVIDENCE"; printf ',"metrics":{"baseline":%s,"delivery":%s,"ai_product":%s,"phase_outcomes":%s,"phase_leading_indicators":%s},"exit_code":%d,"result":' "$BASELINE_JSON" "$DELIVERY_JSON" "$AI_JSON" "$OUTCOME_JSON" "$LEADING_JSON" "$EXIT_CODE"; json_escape "$RESULT"; printf ',"checks":[%s],"errors":' "$CHECKS"; json_array "${ERRORS[@]}"; printf '}\n'
+    printf '{"schema":1,"kind":"sdlc-measurement","command":"scripts/run-measurement.sh","owner":'; json_escape "$(get_value owner)"; printf ',"cadence":'; json_escape "$(get_value cadence)"; printf ',"commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"tree_digest":'; json_escape "$TREE_DIGEST"; printf ',"measured_at":'; json_escape "$TIMESTAMP"; printf ',"snapshot_evidence":'; json_escape "$SNAPSHOT_EVIDENCE"; printf ',"snapshot_validation_evidence":'; json_escape "$SNAPSHOT_VALIDATION_EVIDENCE"; printf ',"metrics":{"baseline":%s,"delivery":%s,"ai_product":%s,"phase_outcomes":%s,"phase_leading_indicators":%s},"exit_code":%d,"result":' "$BASELINE_JSON" "$DELIVERY_JSON" "$AI_JSON" "$OUTCOME_JSON" "$LEADING_JSON" "$EXIT_CODE"; json_escape "$RESULT"; printf ',"checks":[%s],"errors":' "$CHECKS"; json_array "${ERRORS[@]}"; printf '}\n'
 } > "$RECORD_DIRECTORY/measurement.json"
 if (( RECORD_SPEC == 1 )); then
     set_spec_field measurement_enabled true

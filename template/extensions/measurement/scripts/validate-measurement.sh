@@ -143,6 +143,8 @@ RETENTION="$(get_value retention_days)"
 [[ "$RETENTION" =~ ^[1-9][0-9]*$ ]] || add_error 'measurement.retention_days must be a positive integer.'
 AI_APPLICABLE="$(get_value ai_product_metrics_applicable false)"
 [[ "$AI_APPLICABLE" == true || "$AI_APPLICABLE" == false ]] || add_error 'measurement.ai_product_metrics_applicable must be true or false.'
+REQUIRE_COMPLETION_GATE="$(get_value require_completion_gate false)"
+[[ "$REQUIRE_COMPLETION_GATE" == true || "$REQUIRE_COMPLETION_GATE" == false ]] || add_error 'measurement.require_completion_gate must be true or false.'
 
 check_required_list baseline_metrics lead_time deployment_frequency change_failure_rate recovery_time escaped_defects security_findings review_cycle_count flaky_test_rate rollback_rate
 check_required_list delivery_metrics complete_evidence_rate agent_suggested_defect_rate human_rework review_acceptance_rate scope_drift_rate validation_pass_rate model_tool_policy_violations
@@ -184,7 +186,7 @@ COMMIT_SHA="$(get_commit_sha)"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if (( ${#ERRORS[@]} == 0 )); then RESULT='PASS'; EXIT_CODE=0; else RESULT='FAIL'; EXIT_CODE=1; fi
 {
-    printf '{"schema":1,"kind":"sdlc-measurement-config-validation","command":"scripts/validate-measurement.sh","commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"timestamp":'; json_escape "$TIMESTAMP"; printf ',"owner":'; json_escape "$(get_value owner)"; printf ',"cadence":'; json_escape "$CADENCE"; printf ',"exit_code":%d,"result":' "$EXIT_CODE"; json_escape "$RESULT"; printf ',"errors":'; json_array "${ERRORS[@]}"; printf '}\n'
+    printf '{"schema":1,"kind":"sdlc-measurement-config-validation","command":"scripts/validate-measurement.sh","commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"timestamp":'; json_escape "$TIMESTAMP"; printf ',"owner":'; json_escape "$(get_value owner)"; printf ',"cadence":'; json_escape "$CADENCE"; printf ',"require_completion_gate":'; json_escape "$REQUIRE_COMPLETION_GATE"; printf ',"exit_code":%d,"result":' "$EXIT_CODE"; json_escape "$RESULT"; printf ',"errors":'; json_array "${ERRORS[@]}"; printf '}\n'
 } > "$RECORD_DIRECTORY/measurement-config-validation.json"
 if (( ${#ERRORS[@]} > 0 )); then exit 1; fi
 echo '[PASS] Measurement configuration is valid.'

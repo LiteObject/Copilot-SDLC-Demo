@@ -299,6 +299,10 @@ source to a deployable, traceable artifact.
 | Evidence | Release manifest, SHA-256 digests, SBOM, provenance, logs, and rollback evidence |
 | Regression coverage | `tests/fixtures/phase3/` and `tests/phase3/` |
 
+Release assurance remains opt-in. Projects and features that do not deploy can
+leave the deployment-readiness and release-assurance controls disabled and use
+the direct testing-to-done workflow path.
+
 ## Phase 4: Operational Readiness and Reliability
 
 ### Objective
@@ -408,6 +412,7 @@ tools, create code, and interact with external systems.
 | Config validation | `scripts/validate-ai-governance.ps1` and `.sh` |
 | Change ledger | `scripts/record-ai-change.ps1` and `.sh` with allowlist and human-approval enforcement |
 | Evaluation gate | `scripts/run-ai-governance.ps1` and `.sh` with task evidence and `gate_ai_governance_*` recording |
+| Transition enforcement | Enabled AI governance is required before `CODING -> REVIEW` |
 | Automation | Scheduled/manual `ai-governance.yml` with retained evidence |
 | Regression coverage | `tests/fixtures/phase5/` and `tests/phase5/` |
 
@@ -491,6 +496,7 @@ implementation; they do not by themselves grant compliance certification.
 | Runtime and operations | Runtime control, production monitoring, rollback, and decommissioning plans with required safety controls |
 | Config validation | `scripts/validate-ai-lifecycle.ps1` and `.sh` |
 | Lifecycle gate | `scripts/run-ai-lifecycle.ps1` and `.sh` with evaluation, red-team, production-exercise, and `gate_ai_lifecycle_*` evidence |
+| Transition enforcement | Enabled AI lifecycle is required on the final transition to `DONE` |
 | Automation | Scheduled/manual `ai-lifecycle.yml` with retained evidence |
 | Regression coverage | `tests/fixtures/phase6/` and `tests/phase6/` |
 
@@ -537,10 +543,11 @@ rather than measuring agent activity or code volume.
 |---|---|
 | Configuration | `measurement` contract in `template/base/.github/sdlc-config.yml`, Phase 7 task IDs, and revision-bound fields in `docs/spec.md` |
 | Measurement extension | `template/extensions/measurement/` |
-| Metric governance | Baseline, delivery, AI-product, and roadmap outcome/leading-indicator catalogs with named ownership and privacy rules |
+| Metric governance | Baseline, delivery, AI-product, and roadmap outcome/leading-indicator catalogs with named ownership, privacy rules, and validated JSON snapshots |
 | Continuous improvement | Improvement log and quarterly process-review templates with observed-effect and regression fields |
 | Config validation | `scripts/validate-measurement.ps1` and `.sh` |
 | Measurement gate | `scripts/run-measurement.ps1` and `.sh` with baseline, snapshot, review, and `gate_measurement_*` evidence |
+| Transition enforcement | Measurement is cadence-based by default; `measurement.require_completion_gate: true` requires the gate before `DONE` |
 | Automation | Scheduled/manual `measurement.yml` with retained evidence |
 | Regression coverage | `tests/fixtures/phase7/` and `tests/phase7/` |
 
