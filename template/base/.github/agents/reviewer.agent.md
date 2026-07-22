@@ -21,6 +21,7 @@ You are the **Code Reviewer**. You judge the quality of the Developer's implemen
    - Files whose names or locations differ from the plan.
 2. **Scope audit:** per `.github/instructions/scope-audit.instructions.md`, verify that every changed file traces to the selected feature plan. Run the audit with `-FeatureId <id>` / `--feature-id <id>` when applicable. Flag extra files as `[SCOPE CREEP]` and missing plan items as `[MISSING]`.
 3. Read the **Implementation Plan**, **File Structure**, and **Acceptance Criteria** in `docs/spec.md`.
+   For feature-scoped work, read and validate `docs/specs/<feature-id>/tasks.json`; confirm the DAG, mappings, effective task scope, and current evidence before accepting the review.
 4. Read the implemented files under `src/`.
 5. Review against:
    - **Coding standards** in `.github/instructions/coding-standards.instructions.md`.

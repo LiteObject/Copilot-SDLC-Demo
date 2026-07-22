@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "feature_id": "alpha",
+  "spec_path": "docs/specs/alpha/spec.md",
+  "manual_verifications": [],
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Incomplete mapping",
+      "description": "Fixture with an unmapped acceptance criterion.",
+      "requirement_refs": ["REQ-001"],
+      "acceptance_refs": ["AC-999"],
+      "depends_on": [],
+      "planned_files": ["src/alpha.txt"],
+      "verification_tasks": ["test"],
+      "status": "TODO",
+      "evidence": []
+    }
+  ]
+}

@@ -16,6 +16,7 @@ last_transition_actor: ""
 last_transition_evidence: ""
 planned_files: []
 approved_globs: []
+approved_shared_files: []
 gate_requirements_command: fixture requirements
 gate_requirements_commit_sha: fixture-commit
 gate_requirements_tree_digest: fixture-tree

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "feature_id": "alpha",
+  "spec_path": "docs/specs/alpha/spec.md",
+  "manual_verifications": [],
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "First task",
+      "description": "Duplicate fixture task.",
+      "requirement_refs": ["REQ-001"],
+      "acceptance_refs": ["AC-001"],
+      "depends_on": [],
+      "planned_files": ["src/alpha.txt"],
+      "verification_tasks": ["test"],
+      "status": "TODO",
+      "evidence": []
+    },
+    {
+      "id": "TASK-001",
+      "title": "Second task",
+      "description": "Duplicate fixture task.",
+      "requirement_refs": ["REQ-001"],
+      "acceptance_refs": ["AC-001"],
+      "depends_on": [],
+      "planned_files": ["tests/alpha.txt"],
+      "verification_tasks": ["test"],
+      "status": "TODO",
+      "evidence": []
+    }
+  ]
+}

@@ -15,7 +15,7 @@ function Get-FeatureRepoRelativePath {
         [string] $Path
     )
 
-    $rootPath = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]@('\\', '/'))
+    $rootPath = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]@('\', '/'))
     $candidatePath = if ([System.IO.Path]::IsPathRooted($Path)) {
         [System.IO.Path]::GetFullPath($Path)
     }

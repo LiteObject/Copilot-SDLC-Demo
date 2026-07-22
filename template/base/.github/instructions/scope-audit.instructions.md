@@ -14,6 +14,14 @@ For feature-scoped work, the authoritative file is
 and run the audit with `--feature-id <feature-id>` or `-FeatureId <feature-id>`.
 The audit excludes only that feature's spec and evidence namespace; another
 feature's spec is a changed product file and is reported as scope creep.
+Known shared surfaces require an exact `approved_shared_files` record in the
+feature spec using `path|justification|approver|revision_commit_sha|timestamp`.
+The audit reports approved shared changes as `[SHARED_SCOPE]` and same-file
+claims by another feature as `[CONFLICT]`.
+When `docs/specs/<feature-id>/tasks.json` exists, the effective planned scope
+also includes the union of every task's exact `planned_files`. The task graph
+validator is the source for that union; the scope audit remains the final
+check for changed files, missing files, shared approvals, and conflicts.
 
 ## When to Use
 

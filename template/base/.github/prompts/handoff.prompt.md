@@ -6,11 +6,12 @@ argument-hint: "[--phase <current-phase>] [--for <agent-name>]"
 ---
 Generate a short agent orientation prompt for the current feature.
 
-1. Read the current state, goal, and next action from [docs/spec.md](../../docs/spec.md).
+1. Resolve the feature context first. Read the current state, goal, and next action from `docs/specs/<feature-id>/spec.md` when a feature ID is selected; otherwise use [docs/spec.md](../../docs/spec.md).
 2. Read the relevant agent definition from `.github/agents/`.
 3. Produce a **3–6 sentence prompt** covering:
    - **What to do** — the task for the target agent in one sentence.
-   - **Where the plan is** — reference `docs/spec.md` and the relevant sections.
+   - **Where the plan is** — reference the selected feature spec and relevant sections, and include the feature ID and evidence root when feature-scoped.
+   - **Task graph** — include ready, blocked, and completed tasks, task-level evidence, and the next actionable handoff.
    - **Where to start reading** — which instruction files and agent definitions apply.
    - **Branch / workspace context** — any relevant path or state info.
    - **One-line scope reminder** — what NOT to touch.

@@ -19,6 +19,7 @@ base:
     - scripts/check-phase.sh
     - scripts/feature-context.ps1
     - scripts/feature-context.sh
+    - scripts/task-graph.py
     - scripts/migrate-spec.ps1
     - scripts/migrate-spec.sh
     - scripts/validate-sdlc-config.ps1
@@ -77,8 +78,10 @@ ownership:
     - scripts/scope-audit.sh
     - scripts/feature-context.ps1
     - scripts/feature-context.sh
+    - scripts/task-graph.py
   project_owned:
     - .github/sdlc-config.yml
     - docs/spec.md
+    - docs/specs/**
     - src/**
     - tests/**

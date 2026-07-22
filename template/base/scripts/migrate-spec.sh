@@ -279,6 +279,7 @@ else
     done
 fi
 metadata+='approved_globs: []\n'
+metadata+='approved_shared_files: []\n'
 for gate in requirements config install design planning build security review test lint type_check package deploy sbom smoke_test rollback release deployment_readiness ai_governance ai_lifecycle measurement; do
     metadata+="gate_${gate}_command: \"\"\n"
     metadata+="gate_${gate}_commit_sha: \"\"\n"

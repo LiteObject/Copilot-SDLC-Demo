@@ -7,11 +7,12 @@ usage() {
 Installs the Copilot SDLC base payload into a target folder.
 
 Usage:
-  ./tools/scaffold-sdlc.sh <target> [--extension <name>] [--force] [--validate-config]
+  ./tools/scaffold-sdlc.sh <target> [--feature-id <id>] [--extension <name>] [--force] [--validate-config]
 
 Options:
   --template <name>       Template name; base is currently available.
   --extension <name>      Install an extension from template/extensions.
+  --feature-id <id>       Create docs/specs/<id>/spec.md without replacing docs/spec.md.
   --variable Name=Value   Render a template variable.
   --force                 Refresh unchanged template-owned files.
   --validate-config       Run the installed config validator and fail until configured.
@@ -26,6 +27,7 @@ fi
 FORCE=0
 VALIDATE_CONFIG=0
 TARGET=''
+FEATURE_ID=''
 TEMPLATE='base'
 EXTENSIONS=()
 VARIABLES=()
@@ -39,6 +41,11 @@ while (( $# > 0 )); do
     --validate-config)
       VALIDATE_CONFIG=1
       shift
+      ;;
+    --feature-id)
+      [[ $# -ge 2 ]] || { echo 'Missing value for --feature-id.' >&2; exit 1; }
+      FEATURE_ID="$2"
+      shift 2
       ;;
     --template)
       [[ $# -ge 2 ]] || { echo 'Missing value for --template.' >&2; exit 1; }
@@ -307,6 +314,13 @@ mkdir -p "$TARGET"
 TARGET_ROOT="$(cd "$TARGET" && pwd -P)"
 PROJECT_NAME="$(basename "$TARGET_ROOT")"
 
+if [[ -n "$FEATURE_ID" ]]; then
+  [[ "$FEATURE_ID" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || die "Feature ID '$FEATURE_ID' is invalid. Use lowercase letters, numbers, and single hyphens only."
+  FEATURE_SPEC_RELATIVE="docs/specs/$FEATURE_ID/spec.md"
+  FEATURE_SPEC_PATH="$TARGET_ROOT/$FEATURE_SPEC_RELATIVE"
+  [[ ! -e "$FEATURE_SPEC_PATH" ]] || die "Feature spec already exists at: $FEATURE_SPEC_PATH"
+fi
+
 declare -A tokens=()
 tokens[ProjectName]="$PROJECT_NAME"
 tokens[ProjectRoot]="$TARGET_ROOT"
@@ -471,6 +485,26 @@ state_tmp="$state_path.tmp"
 } > "$state_tmp"
 mv "$state_tmp" "$state_path"
 echo "  recorded installer ownership in $STATE_RELATIVE"
+
+if [[ -n "$FEATURE_ID" ]]; then
+  mkdir -p "$(dirname "$FEATURE_SPEC_PATH")"
+  tr -d '\r' < "$TEMPLATE_ROOT/docs/spec.md" | awk -v feature_id="$FEATURE_ID" -v feature_spec="$FEATURE_SPEC_RELATIVE" '
+    $0 == "feature_id: \"\"" { print "feature_id: \"" feature_id "\""; next }
+    $0 == "spec_path: \"docs/spec.md\"" { print "spec_path: \"" feature_spec "\""; next }
+    { print }
+  ' > "$FEATURE_SPEC_PATH"
+  echo "  created  $FEATURE_SPEC_RELATIVE (project-owned feature spec)"
+  cat > "$TARGET_ROOT/docs/specs/$FEATURE_ID/tasks.json" <<EOF
+{
+  "schema_version": 1,
+  "feature_id": "$FEATURE_ID",
+  "spec_path": "$FEATURE_SPEC_RELATIVE",
+  "manual_verifications": [],
+  "tasks": []
+}
+EOF
+  echo "  created  docs/specs/$FEATURE_ID/tasks.json (project-owned task graph starter)"
+fi
 echo
 echo "Done. Wrote $written file(s); left $untouched existing file(s) untouched."
 echo "Project-owned files are preserved; use --force to refresh unchanged template-owned files."

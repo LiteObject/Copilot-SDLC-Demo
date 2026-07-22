@@ -73,6 +73,7 @@ function Read-ScopeMetadata {
     $values = @{}
     $plannedFiles = New-Object System.Collections.Generic.List[string]
     $approvedGlobs = New-Object System.Collections.Generic.List[string]
+    $approvedSharedFiles = New-Object System.Collections.Generic.List[string]
     $activeList = $null
     foreach ($line in ($frontMatterMatch.Groups['frontmatter'].Value -split '\r?\n')) {
         if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) {
@@ -83,10 +84,10 @@ function Read-ScopeMetadata {
             $value = ConvertFrom-YamlScalar $Matches.value
             $values[$key] = $value
             $activeList = $null
-            if ($key -in @('planned_files', 'approved_globs') -and $value -eq '') {
+            if ($key -in @('planned_files', 'approved_globs', 'approved_shared_files') -and $value -eq '') {
                 $activeList = $key
             }
-            elseif ($key -in @('planned_files', 'approved_globs') -and $value -ne '[]') {
+            elseif ($key -in @('planned_files', 'approved_globs', 'approved_shared_files') -and $value -ne '[]') {
                 throw "Metadata list '$key' must use [] or an indented YAML list."
             }
             continue
@@ -94,7 +95,8 @@ function Read-ScopeMetadata {
         if ($null -ne $activeList -and $line -match '^\s*-\s*(?<item>.*)$') {
             $item = ConvertFrom-YamlScalar $Matches.item
             if ($activeList -eq 'planned_files') { [void]$plannedFiles.Add($item) }
-            else { [void]$approvedGlobs.Add($item) }
+            elseif ($activeList -eq 'approved_globs') { [void]$approvedGlobs.Add($item) }
+            else { [void]$approvedSharedFiles.Add($item) }
             continue
         }
         throw "Unsupported YAML front matter line: $line"
@@ -104,6 +106,7 @@ function Read-ScopeMetadata {
         Values        = $values
         PlannedFiles  = @($plannedFiles)
         ApprovedGlobs = @($approvedGlobs)
+        ApprovedSharedFiles = @($approvedSharedFiles)
     }
 }
 
@@ -155,6 +158,97 @@ function Find-GlobApproval {
         }
     }
     return $false
+}
+
+function Find-SharedFileApproval {
+    param(
+        [string] $Path,
+        [string[]] $ApprovedSharedFiles,
+        [string] $Revision
+    )
+
+    foreach ($record in $ApprovedSharedFiles) {
+        $parts = $record -split '\|', 5
+        if ($parts.Count -ne 5) { continue }
+        $approvalPath = Normalize-RelativePath $parts[0]
+        $justification = $parts[1].Trim()
+        $approver = $parts[2].Trim()
+        $approvalRevision = $parts[3].Trim()
+        $timestamp = $parts[4].Trim()
+        if ($approvalPath -eq $Path -and
+            -not (Test-GlobPattern $approvalPath) -and
+            $justification -and $approver -and $approvalRevision -and $timestamp -and
+            ([string]::IsNullOrWhiteSpace($Revision) -or $approvalRevision -eq $Revision)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-SharedProjectFile {
+    param([string] $Path)
+
+    return $Path -match '(^|/)(\.github/sdlc-config\.yml|\.github/workflows/[^/]+|package\.json|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb|requirements\.txt|pyproject\.toml|poetry\.lock|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|composer\.json|Gemfile|Gemfile\.lock|[^/]+\.sln|[^/]+\.csproj|[^/]+\.props|[^/]+\.targets)$'
+}
+
+function Get-FeaturePlanConflicts {
+    param(
+        [string] $Root,
+        [string] $CurrentSpecRelativePath,
+        [string] $CurrentFeatureId,
+        [string[]] $ChangedFiles
+    )
+
+    $conflicts = New-Object System.Collections.Generic.List[string]
+    if (-not $CurrentFeatureId) { return @() }
+    $featuresRoot = Join-Path $Root 'docs/specs'
+    if (-not (Test-Path -LiteralPath $featuresRoot -PathType Container)) { return @() }
+
+    foreach ($otherSpec in @(Get-ChildItem -LiteralPath $featuresRoot -Recurse -File -Filter 'spec.md')) {
+        $otherRelativePath = Get-FeatureRepoRelativePath -Root $Root -Path $otherSpec.FullName
+        if ($otherRelativePath -eq $CurrentSpecRelativePath) { continue }
+        try { $otherMetadata = Read-ScopeMetadata -Content (Get-Content -LiteralPath $otherSpec.FullName -Raw) }
+        catch { continue }
+        $otherFeatureId = if ($otherMetadata.Values.ContainsKey('feature_id')) { [string]$otherMetadata.Values['feature_id'] } else { '' }
+        if (-not $otherFeatureId -or $otherFeatureId -eq $CurrentFeatureId) { continue }
+        foreach ($rawOtherPath in $otherMetadata.PlannedFiles) {
+            $otherPath = Normalize-RelativePath $rawOtherPath
+            if (Test-GlobPattern $otherPath) { continue }
+            foreach ($changedFile in $ChangedFiles) {
+                if ($changedFile -eq $otherPath) {
+                    [void]$conflicts.Add("$changedFile (planned by feature '$otherFeatureId')")
+                }
+            }
+        }
+    }
+    return @($conflicts | Sort-Object -Unique)
+}
+
+function Get-TaskGraphScope {
+    param(
+        [string] $Root,
+        [string] $CurrentFeatureId,
+        [string] $CurrentSpecPath
+    )
+
+    $empty = [pscustomobject]@{ PlannedFiles = @(); SharedFiles = @() }
+    if (-not $CurrentFeatureId) { return $empty }
+    $tasksPath = Join-Path $Root "docs/specs/$CurrentFeatureId/tasks.json"
+    if (-not (Test-Path -LiteralPath $tasksPath -PathType Leaf)) { return $empty }
+    $taskGraphPath = Join-Path $PSScriptRoot 'task-graph.py'
+    if (-not (Test-Path -LiteralPath $taskGraphPath -PathType Leaf)) { throw "Task graph validator not found: $taskGraphPath" }
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($null -eq $python) { $python = Get-Command python3 -ErrorAction SilentlyContinue }
+    if ($null -eq $python) { throw 'Python 3 is required when a feature tasks.json exists.' }
+    $output = & $python.Source $taskGraphPath scope --repo-root $Root --feature-id $CurrentFeatureId --spec-path $CurrentSpecPath --output-format lines 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Task graph validation failed: $($output -join ' ')" }
+    $planned = New-Object System.Collections.Generic.List[string]
+    $shared = New-Object System.Collections.Generic.List[string]
+    foreach ($line in $output) {
+        if ($line -match '^TASK_FILE:(.+)$') { [void]$planned.Add((Normalize-RelativePath $Matches[1])) }
+        elseif ($line -match '^SHARED_FILE:(.+)$') { [void]$shared.Add((Normalize-RelativePath $Matches[1])) }
+    }
+    return [pscustomobject]@{ PlannedFiles = @($planned | Sort-Object -Unique); SharedFiles = @($shared | Sort-Object -Unique) }
 }
 
 function Get-ChangedFiles {
@@ -224,6 +318,23 @@ $revision = if ($metadata.Values.ContainsKey('revision_commit_sha')) { [string]$
 $plannedEntries = New-Object System.Collections.Generic.List[object]
 $invalidPlan = New-Object System.Collections.Generic.List[string]
 $unapprovedGlobs = New-Object System.Collections.Generic.List[string]
+$invalidSharedFiles = New-Object System.Collections.Generic.List[string]
+
+foreach ($record in $metadata.ApprovedSharedFiles) {
+    $parts = $record -split '\|', 5
+    if ($parts.Count -ne 5) {
+        [void]$invalidSharedFiles.Add("$record (expected path|justification|approver|revision|timestamp)")
+        continue
+    }
+    $approvalPath = Normalize-RelativePath $parts[0]
+    if ([string]::IsNullOrWhiteSpace($approvalPath) -or
+        $approvalPath.StartsWith('/') -or $approvalPath -match '^[A-Za-z]:/' -or
+        $approvalPath -match '(^|/)\.\.(?:/|$)' -or (Test-GlobPattern $approvalPath) -or
+        [string]::IsNullOrWhiteSpace($parts[1]) -or [string]::IsNullOrWhiteSpace($parts[2]) -or
+        [string]::IsNullOrWhiteSpace($parts[3]) -or [string]::IsNullOrWhiteSpace($parts[4])) {
+        [void]$invalidSharedFiles.Add("$record (invalid explicit shared-file approval)")
+    }
+}
 
 foreach ($rawPath in $metadata.PlannedFiles) {
     $path = Normalize-RelativePath $rawPath
@@ -252,6 +363,19 @@ foreach ($rawPath in $metadata.PlannedFiles) {
         })
 }
 
+try {
+    $taskGraphScope = Get-TaskGraphScope -Root $RepoRoot -CurrentFeatureId $FeatureId -CurrentSpecPath $SpecPath
+}
+catch {
+    Write-Host "[PLAN_INVALID] $($_.Exception.Message)"
+    exit 2
+}
+foreach ($taskPath in $taskGraphScope.PlannedFiles) {
+    if (-not @($plannedEntries | Where-Object { $_.Pattern -ceq $taskPath })) {
+        [void]$plannedEntries.Add([pscustomobject]@{ Pattern = $taskPath; IsGlob = $false; Approved = $true; Source = 'task_graph' })
+    }
+}
+
 Write-Host '=== Scope Audit ==='
 if ($FeatureId) { Write-Host "Feature: $FeatureId" }
 Write-Host "Planned files: $($plannedEntries.Count)"
@@ -270,6 +394,7 @@ if ($unapprovedGlobs.Count -gt 0) {
 }
 
 $changedFiles = @(Get-ChangedFiles -Root $RepoRoot -Reference $BaseRef)
+$featureConflicts = @(Get-FeaturePlanConflicts -Root $RepoRoot -CurrentSpecRelativePath $SpecRelativePath -CurrentFeatureId $FeatureId -ChangedFiles $changedFiles)
 if ($changedFiles.Count -eq 0) {
     Write-Host '[INFO] No changed files detected.'
 }
@@ -286,6 +411,7 @@ else {
 }
 $workflowChanges = New-Object System.Collections.Generic.List[string]
 $inScope = New-Object System.Collections.Generic.List[string]
+$sharedScope = New-Object System.Collections.Generic.List[string]
 $scopeCreep = New-Object System.Collections.Generic.List[string]
 
 foreach ($file in $changedFiles) {
@@ -293,6 +419,21 @@ foreach ($file in $changedFiles) {
     $isLegacyWorkflowFile = -not $FeatureId -and (($workflowFiles -contains $file) -or $file -eq '.sdlc' -or $file.StartsWith('.sdlc/'))
     if ($isFeatureWorkflowFile -or $isLegacyWorkflowFile) {
         [void]$workflowChanges.Add($file)
+        continue
+    }
+
+    $fileConflicts = @($featureConflicts | Where-Object { $_ -like "$file (*)" })
+    if ($fileConflicts.Count -gt 0) {
+        continue
+    }
+
+    $sharedApproved = Find-SharedFileApproval -Path $file -ApprovedSharedFiles $metadata.ApprovedSharedFiles -Revision $revision
+    if ($sharedApproved) {
+        [void]$sharedScope.Add($file)
+        continue
+    }
+    if (Test-SharedProjectFile -Path $file) {
+        [void]$scopeCreep.Add("$file (shared file requires an approved_shared_files record)")
         continue
     }
 
@@ -338,30 +479,50 @@ if ($scopeCreep.Count -gt 0) {
     foreach ($file in $scopeCreep) { Write-Host "  !!  $file" }
     Write-Host ''
 }
+if ($sharedScope.Count -gt 0) {
+    Write-Host "[SHARED_SCOPE] ($($sharedScope.Count) files) - explicit shared-file approval:"
+    foreach ($file in $sharedScope) { Write-Host "  OK  $file" }
+    Write-Host ''
+}
+if ($featureConflicts.Count -gt 0) {
+    Write-Host "[CONFLICT] ($($featureConflicts.Count) files) - another feature claims the changed file:"
+    foreach ($conflict in $featureConflicts) { Write-Host "  !!  $conflict" }
+    Write-Host ''
+}
+if ($invalidSharedFiles.Count -gt 0) {
+    Write-Host "[PLAN_INVALID] ($($invalidSharedFiles.Count)) invalid shared-file approvals"
+    foreach ($issue in $invalidSharedFiles) { Write-Host "  !!  $issue" }
+    Write-Host ''
+}
 if ($missingFiles.Count -gt 0) {
     Write-Host "[MISSING] ($($missingFiles.Count) files) - exact planned files not present:"
     foreach ($file in $missingFiles) { Write-Host "  ??  $file" }
     Write-Host ''
 }
-if ($invalidPlan.Count -eq 0 -and $unapprovedGlobs.Count -eq 0 -and
-    $scopeCreep.Count -eq 0 -and $missingFiles.Count -eq 0) {
+if ($invalidPlan.Count -eq 0 -and $unapprovedGlobs.Count -eq 0 -and $invalidSharedFiles.Count -eq 0 -and
+    $featureConflicts.Count -eq 0 -and $scopeCreep.Count -eq 0 -and $missingFiles.Count -eq 0) {
     Write-Host '[PASS] All changes are within the approved planned scope.'
 }
 
 $summary = [ordered]@{
+    feature_id      = $FeatureId
+    spec_path       = $SpecRelativePath
     planned         = $plannedEntries.Count
     changed         = $changedFiles.Count
     workflow        = @($workflowChanges)
     in_scope        = @($inScope)
+    shared_scope    = @($sharedScope)
     scope_creep     = @($scopeCreep)
+    conflicts       = @($featureConflicts)
+    invalid_shared_files = @($invalidSharedFiles)
     missing         = @($missingFiles)
     invalid_plan    = @($invalidPlan)
     unapproved_globs = @($unapprovedGlobs)
-    clean           = ($invalidPlan.Count -eq 0 -and $unapprovedGlobs.Count -eq 0 -and $scopeCreep.Count -eq 0 -and $missingFiles.Count -eq 0)
+    clean           = ($invalidPlan.Count -eq 0 -and $unapprovedGlobs.Count -eq 0 -and $invalidSharedFiles.Count -eq 0 -and $featureConflicts.Count -eq 0 -and $scopeCreep.Count -eq 0 -and $missingFiles.Count -eq 0)
 }
 Write-Host '--- JSON Summary ---'
 Write-Host ($summary | ConvertTo-Json -Compress)
 
-if ($invalidPlan.Count -gt 0 -or $unapprovedGlobs.Count -gt 0) { exit 2 }
+if ($invalidPlan.Count -gt 0 -or $unapprovedGlobs.Count -gt 0 -or $invalidSharedFiles.Count -gt 0 -or $featureConflicts.Count -gt 0) { exit 2 }
 if ($scopeCreep.Count -gt 0 -or $missingFiles.Count -gt 0) { exit 1 }
 exit 0

@@ -15,6 +15,7 @@ EVIDENCE_DIRECTORY=""
 SPEC_PATH=""
 FEATURE_ID=""
 TASK='all'
+TASK_ID=''
 RECORD_SPEC=0
 
 declare -A CFG=()
@@ -29,7 +30,7 @@ ACTIVE_LIST=""
 usage() {
     cat <<'EOF'
 Usage: ./scripts/run-sdlc-task.sh [--task TASK|all] [--config-path PATH]
-    [--repo-root PATH] [--evidence-directory PATH] [--spec-path PATH] [--feature-id ID]
+    [--repo-root PATH] [--evidence-directory PATH] [--spec-path PATH] [--feature-id ID] [--task-id ID]
        [--record-spec]
 EOF
 }
@@ -64,6 +65,11 @@ while (($# > 0)); do
         --feature-id)
             [[ $# -ge 2 ]] || { echo '[FAIL] --feature-id requires a value.'; exit 2; }
             FEATURE_ID="$2"
+            shift 2
+            ;;
+        --task-id)
+            [[ $# -ge 2 ]] || { echo '[FAIL] --task-id requires a value.'; exit 2; }
+            TASK_ID="$2"
             shift 2
             ;;
         --record-spec)
@@ -179,7 +185,7 @@ command_display() {
 }
 get_commit_sha() { git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown'; }
 get_tree_digest() {
-    if command -v sha256sum >/dev/null 2>&1; then git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null | sha256sum | awk '{print $1}'; else git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null | shasum -a 256 | awk '{print $1}'; fi
+    if command -v sha256sum >/dev/null 2>&1; then git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude)docs/specs/**/tasks.json' ':(exclude).sdlc/**' 2>/dev/null | sha256sum | awk '{print $1}'; else git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude)docs/specs/**/tasks.json' ':(exclude).sdlc/**' 2>/dev/null | shasum -a 256 | awk '{print $1}'; fi
 }
 json_escape() { local value="$1"; value="${value//\\/\\\\}"; value="${value//\"/\\\"}"; value="${value//$'\r'/\\r}"; value="${value//$'\n'/\\n}"; printf '"%s"' "$value"; }
 json_array() { local first=1 value; printf '['; for value in "$@"; do (( first == 0 )) && printf ','; json_escape "$value"; first=0; done; printf ']'; }
@@ -188,6 +194,18 @@ set_spec_field() {
     [[ -f "$SPEC_PATH" ]] || { echo "[FAIL] Spec file not found for --record-spec: $SPEC_PATH"; return 1; }
     if ! awk -v key="$key" -v value="$value" '$0 ~ "^" key ":" { print key ": " value; found=1; next } { print } END { if (!found) exit 3 }' "$SPEC_PATH" > "$temp"; then rm -f "$temp"; echo "[FAIL] Spec metadata field '$key' was not found in $SPEC_PATH"; return 1; fi
     mv "$temp" "$SPEC_PATH"
+}
+
+record_task_graph_evidence() {
+    local record_path="$1"
+    [[ -n "$FEATURE_ID" && -n "$TASK_ID" && -f "$REPO_ROOT/docs/specs/$FEATURE_ID/tasks.json" ]] || return 0
+    local task_graph="$SCRIPT_DIR/task-graph.py" python_executable=''
+    [[ -f "$task_graph" ]] || { echo "[FAIL] Task graph validator not found: $task_graph"; return 1; }
+    for candidate in python3 python; do
+        if command -v "$candidate" >/dev/null 2>&1; then python_executable="$candidate"; break; fi
+    done
+    [[ -n "$python_executable" ]] || { echo '[FAIL] Python 3 is required when a feature tasks.json exists.'; return 1; }
+    "$python_executable" "$task_graph" record-evidence --repo-root "$REPO_ROOT" --feature-id "$FEATURE_ID" --record-path "$record_path"
 }
 
 VALIDATOR="$SCRIPT_DIR/validate-sdlc-config.sh"
@@ -228,6 +246,7 @@ for task_name in "${TASK_NAMES[@]}"; do
     TASK_ARGUMENTS=()
     if [[ -n "$serialized" ]]; then while IFS= read -r -d $'\x1f' item; do TASK_ARGUMENTS+=("$item"); done < <(printf '%s\x1f' "$serialized"); fi
     command="$(command_display "$executable" "$task_name")"
+    evidence_task_id="${TASK_ID:-$task_name}"
     log_path="$EVIDENCE_ROOT/$task_name.log"
     record_path="$EVIDENCE_ROOT/$task_name.json"
     started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -241,8 +260,9 @@ for task_name in "${TASK_NAMES[@]}"; do
     relative_log="${log_path:${#REPO_ROOT}}"
     relative_log="${relative_log#/}"
     {
-        printf '{"schema":1,"kind":"sdlc-task","task":'; json_escape "$task_name"; printf ',"executable":'; json_escape "$executable"; printf ',"args":'; json_array "${TASK_ARGUMENTS[@]}"; printf ',"command":'; json_escape "$command"; printf ',"feature_id":'; json_escape "$FEATURE_ID"; printf ',"spec_path":'; json_escape "$SPEC_RELATIVE_PATH"; printf ',"commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"tree_digest":'; json_escape "$TREE_DIGEST"; printf ',"started_at":'; json_escape "$started_at"; printf ',"finished_at":'; json_escape "$finished_at"; printf ',"exit_code":%d,"result":"%s","evidence":' "$exit_code" "$result"; json_escape "$relative_log"; printf '}\n'
+        printf '{"schema":1,"kind":"sdlc-task","task":'; json_escape "$evidence_task_id"; printf ',"verification_task":'; json_escape "$task_name"; printf ',"executable":'; json_escape "$executable"; printf ',"args":'; json_array "${TASK_ARGUMENTS[@]}"; printf ',"command":'; json_escape "$command"; printf ',"feature_id":'; json_escape "$FEATURE_ID"; printf ',"spec_path":'; json_escape "$SPEC_RELATIVE_PATH"; printf ',"commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"tree_digest":'; json_escape "$TREE_DIGEST"; printf ',"started_at":'; json_escape "$started_at"; printf ',"finished_at":'; json_escape "$finished_at"; printf ',"exit_code":%d,"result":"%s","evidence":' "$exit_code" "$result"; json_escape "$relative_log"; printf '}\n'
     } > "$record_path"
+    record_task_graph_evidence "$record_path" || exit 2
     if (( RECORD_SPEC == 1 )); then
         set_spec_field "gate_${task_name}_command" "\"$command\""
         set_spec_field "gate_${task_name}_commit_sha" "\"$COMMIT_SHA\""

@@ -29,11 +29,18 @@
     Run the installed Phase 1 configuration validator and fail if adoption is
     not configured yet.
 
+.PARAMETER FeatureId
+    Create a new project-owned feature spec at
+    docs/specs/<feature-id>/spec.md. Existing docs/spec.md is preserved.
+
 .EXAMPLE
     ./tools/scaffold-sdlc.ps1 -Target ../my-project
 
 .EXAMPLE
     ./tools/scaffold-sdlc.ps1 -Target ../my-project -Extension frontend
+
+.EXAMPLE
+    ./tools/scaffold-sdlc.ps1 -Target ../my-project -FeatureId checkout-flow
 #>
 [CmdletBinding()]
 param(
@@ -50,7 +57,9 @@ param(
 
     [switch] $Force,
 
-    [switch] $ValidateConfig
+    [switch] $ValidateConfig,
+
+    [string] $FeatureId
 )
 
 $ErrorActionPreference = 'Stop'
@@ -59,6 +68,10 @@ $TemplateRoot = Join-Path $RepoRoot 'template/base'
 $ExtensionsRoot = Join-Path $RepoRoot 'template/extensions'
 $StateRelativePath = '.sdlc/sdlc-installer-state.json'
 $Utf8NoBom = New-Object -TypeName System.Text.UTF8Encoding -ArgumentList ([bool]$false)
+$FeatureContextPath = Join-Path $TemplateRoot 'scripts/feature-context.ps1'
+if (Test-Path -LiteralPath $FeatureContextPath -PathType Leaf) {
+    . $FeatureContextPath
+}
 $ProjectOwnedPaths = @(
     '.github/sdlc-config.yml',
     'docs/spec.md'
@@ -99,6 +112,16 @@ function Test-ProjectOwnedPath {
 
     return $ProjectOwnedPaths -contains $Path
 }
+
+if ($FeatureId) {
+    if (Get-Command Assert-FeatureIdentifier -ErrorAction SilentlyContinue) {
+        $FeatureId = Assert-FeatureIdentifier $FeatureId
+    }
+    elseif ($FeatureId -notmatch '^[a-z0-9]+(?:-[a-z0-9]+)*$') {
+        throw "FeatureId '$FeatureId' is invalid. Use lowercase letters, numbers, and single hyphens only."
+    }
+}
+$FeatureSpecRelativePath = if ($FeatureId) { "docs/specs/$FeatureId/spec.md" } else { '' }
 
 function New-TemplateEntry {
     param(
@@ -498,6 +521,10 @@ if (-not (Test-Path -LiteralPath $Target -PathType Container)) {
 }
 
 $TargetRoot = (Resolve-Path -LiteralPath $Target).Path
+$FeatureSpecPath = if ($FeatureId) { Join-Path $TargetRoot $FeatureSpecRelativePath } else { '' }
+if ($FeatureSpecPath -and (Test-Path -LiteralPath $FeatureSpecPath)) {
+    throw "Feature spec already exists at: $FeatureSpecPath"
+}
 $projectName = Split-Path -Leaf $TargetRoot
 if ([string]::IsNullOrWhiteSpace($projectName)) {
     $projectName = $TargetRoot
@@ -642,6 +669,26 @@ foreach ($manifestPath in $installOrder) {
 Write-InstallerState -Path $StatePath -Files $nextManagedFiles `
     -TemplateName $Template -ExtensionNames @($Extension)
 Write-Host "  recorded installer ownership in $StateRelativePath"
+
+if ($FeatureId) {
+    $featureSpecParent = Split-Path -Parent $FeatureSpecPath
+    New-Item -ItemType Directory -Path $featureSpecParent -Force | Out-Null
+    $featureSpecContent = [System.IO.File]::ReadAllText((Join-Path $TemplateRoot 'docs/spec.md'))
+    $featureSpecContent = $featureSpecContent.Replace('feature_id: ""', "feature_id: `"$FeatureId`"")
+    $featureSpecContent = $featureSpecContent.Replace('spec_path: "docs/spec.md"', "spec_path: `"$FeatureSpecRelativePath`"")
+    [System.IO.File]::WriteAllText($FeatureSpecPath, $featureSpecContent, $Utf8NoBom)
+    Write-Host "  created  $FeatureSpecRelativePath (project-owned feature spec)"
+    $featureTasksPath = Join-Path $featureSpecParent 'tasks.json'
+    $featureTasks = [ordered]@{
+        schema_version = 1
+        feature_id = $FeatureId
+        spec_path = $FeatureSpecRelativePath
+        manual_verifications = @()
+        tasks = @()
+    }
+    [System.IO.File]::WriteAllText($featureTasksPath, ($featureTasks | ConvertTo-Json -Depth 8) + [Environment]::NewLine, $Utf8NoBom)
+    Write-Host "  created  docs/specs/$FeatureId/tasks.json (project-owned task graph starter)"
+}
 
 Write-Host ""
 Write-Host "Done. Wrote $written file(s); left $leftUntouched existing file(s) untouched."

@@ -17,6 +17,7 @@ last_transition_evidence: ""
 planned_files:
   - src/alpha.txt
 approved_globs: []
+approved_shared_files: []
 ---
 
 # Feature Scope Spec

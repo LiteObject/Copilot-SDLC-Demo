@@ -90,6 +90,7 @@ fi
 declare -A META=()
 declare -a PLANNED_FILES=()
 declare -a APPROVED_GLOBS=()
+declare -a APPROVED_SHARED_FILES=()
 ACTIVE_LIST=""
 
 trim_value() {
@@ -119,7 +120,7 @@ while IFS= read -r line; do
         value="$(unquote_value "${BASH_REMATCH[2]}")"
         META["$key"]="$value"
         ACTIVE_LIST=""
-        if [[ "$key" == 'planned_files' || "$key" == 'approved_globs' ]]; then
+        if [[ "$key" == 'planned_files' || "$key" == 'approved_globs' || "$key" == 'approved_shared_files' ]]; then
             if [[ "$value" == '[]' ]]; then
                 :
             elif [[ -z "$value" ]]; then
@@ -133,8 +134,10 @@ while IFS= read -r line; do
         item="$(unquote_value "${BASH_REMATCH[1]}")"
         if [[ "$ACTIVE_LIST" == 'planned_files' ]]; then
             PLANNED_FILES+=("$item")
-        else
+        elif [[ "$ACTIVE_LIST" == 'approved_globs' ]]; then
             APPROVED_GLOBS+=("$item")
+        else
+            APPROVED_SHARED_FILES+=("$item")
         fi
     else
         echo "[ERROR] Unsupported YAML front matter line: $line"
@@ -171,6 +174,35 @@ if [[ "$(meta_get sdlc_schema)" != '1' ]]; then
     exit 2
 fi
 
+if [[ -n "$FEATURE_ID" && -f "$REPO_ROOT/docs/specs/$FEATURE_ID/tasks.json" ]]; then
+    TASK_GRAPH="$SCRIPT_DIR/task-graph.py"
+    [[ -f "$TASK_GRAPH" ]] || { echo "[ERROR] Task graph validator not found: $TASK_GRAPH"; exit 2; }
+    PYTHON_EXECUTABLE=''
+    for candidate in python3 python; do
+        if command -v "$candidate" >/dev/null 2>&1; then PYTHON_EXECUTABLE="$candidate"; break; fi
+    done
+    [[ -n "$PYTHON_EXECUTABLE" ]] || { echo '[ERROR] Python 3 is required when a feature tasks.json exists.'; exit 2; }
+    set +e
+    TASK_SCOPE_OUTPUT="$("$PYTHON_EXECUTABLE" "$TASK_GRAPH" scope --repo-root "$REPO_ROOT" --feature-id "$FEATURE_ID" --spec-path "$SPEC_PATH" --output-format lines 2>&1)"
+    TASK_SCOPE_EXIT=$?
+    set -e
+    if (( TASK_SCOPE_EXIT != 0 )); then
+        echo "[PLAN_INVALID] Task graph validation failed: $TASK_SCOPE_OUTPUT"
+        exit 2
+    fi
+    while IFS= read -r task_scope_line; do
+        [[ "$task_scope_line" == TASK_FILE:* ]] || continue
+        task_path="${task_scope_line#TASK_FILE:}"
+        duplicate=0
+        for existing_path in "${PLANNED_FILES[@]}"; do
+            existing_path="${existing_path//\\//}"
+            while [[ "$existing_path" == ./* ]]; do existing_path="${existing_path#./}"; done
+            [[ "$existing_path" == "$task_path" ]] && duplicate=1
+        done
+        (( duplicate == 0 )) && PLANNED_FILES+=("$task_path")
+    done <<< "$TASK_SCOPE_OUTPUT"
+fi
+
 normalize_path() {
     local value="$1"
     value="${value//\\//}"
@@ -204,6 +236,70 @@ has_valid_glob_approval() {
     return 1
 }
 
+has_valid_shared_file_approval() {
+    local path="$1"
+    local revision="$(meta_get revision_commit_sha)"
+    local record approval_path justification approver approval_revision timestamp
+    for record in "${APPROVED_SHARED_FILES[@]}"; do
+        IFS='|' read -r approval_path justification approver approval_revision timestamp <<< "$record"
+        approval_path="$(normalize_path "$approval_path")"
+        justification="$(trim_value "${justification-}")"
+        approver="$(trim_value "${approver-}")"
+        approval_revision="$(trim_value "${approval_revision-}")"
+        timestamp="$(trim_value "${timestamp-}")"
+          approval_revision_matches=1
+          if [[ -n "$revision" && "$approval_revision" != "$revision" ]]; then approval_revision_matches=0; fi
+          if [[ "$approval_path" == "$path" ]] && ! is_glob "$approval_path" &&
+              [[ -n "$justification" && -n "$approver" && -n "$approval_revision" && -n "$timestamp" ]] &&
+              (( approval_revision_matches == 1 )); then
+            return 0
+        fi
+    done
+    return 1
+}
+
+is_shared_project_file() {
+    case "$1" in
+        .github/sdlc-config.yml|.github/workflows/*)
+            return 0
+            ;;
+    esac
+    case "${1##*/}" in
+        package.json|package-lock.json|yarn.lock|pnpm-lock.yaml|bun.lockb|requirements.txt|pyproject.toml|poetry.lock|Cargo.toml|Cargo.lock|go.mod|go.sum|composer.json|Gemfile|Gemfile.lock|*.sln|*.csproj|*.props|*.targets)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+get_feature_plan_conflicts() {
+    local changed_file other_spec other_feature other_plan features_prefix
+    [[ -n "$FEATURE_ID" && -d "$REPO_ROOT/docs/specs" ]] || return 0
+    features_prefix="$REPO_ROOT/docs/specs/"
+    while IFS= read -r -d '' other_spec; do
+        other_feature="${other_spec#$features_prefix}"
+        other_feature="${other_feature%%/*}"
+        [[ "$other_feature" != "$FEATURE_ID" ]] || continue
+        while IFS= read -r other_plan; do
+            other_plan="$(normalize_path "$other_plan")"
+            [[ -n "$other_plan" ]] || continue
+            is_glob "$other_plan" && continue
+            for changed_file in "${CHANGED_FILES[@]}"; do
+                changed_file="$(normalize_path "$changed_file")"
+                [[ "$changed_file" == "$other_plan" ]] && printf '%s\n' "$changed_file (planned by feature '$other_feature')"
+            done
+        done < <(tr -d '\r' < "$other_spec" | awk '
+            NR == 1 && $0 == "---" { front = 1; next }
+            front && $0 == "---" { exit }
+            front && $0 ~ /^planned_files:[[:space:]]*$/ { active = 1; next }
+            front && $0 ~ /^[A-Za-z0-9_]+:/ { active = 0 }
+            active && $0 ~ /^[[:space:]]*-[[:space:]]*/ { sub(/^[[:space:]]*-[[:space:]]*/, ""); print }
+        ')
+    done < <(find "$REPO_ROOT/docs/specs" -mindepth 2 -maxdepth 2 -type f -name spec.md -print0 2>/dev/null)
+}
+
 glob_to_regex() {
     local pattern="$1"
     local regex='' char next index=0
@@ -230,6 +326,24 @@ declare -a PLAN_IS_GLOB=()
 declare -a PLAN_APPROVED=()
 declare -a INVALID_PLAN=()
 declare -a UNAPPROVED_GLOBS=()
+declare -a INVALID_SHARED_FILES=()
+
+for record in "${APPROVED_SHARED_FILES[@]}"; do
+    IFS='|' read -r approval_path justification approver approval_revision timestamp <<< "$record"
+    approval_path="$(normalize_path "${approval_path-}")"
+    justification="$(trim_value "${justification-}")"
+    approver="$(trim_value "${approver-}")"
+    approval_revision="$(trim_value "${approval_revision-}")"
+    timestamp="$(trim_value "${timestamp-}")"
+    invalid_shared=0
+    if [[ -z "$approval_path" || "$approval_path" == /* ]]; then invalid_shared=1; fi
+    case "$approval_path" in [A-Za-z]:/*|../*|*/../*|.. ) invalid_shared=1 ;; esac
+    if is_glob "$approval_path"; then invalid_shared=1; fi
+    if [[ -z "$justification" || -z "$approver" || -z "$approval_revision" || -z "$timestamp" ]]; then invalid_shared=1; fi
+    if (( invalid_shared == 1 )); then
+        INVALID_SHARED_FILES+=("$record (invalid explicit shared-file approval)")
+    fi
+done
 
 for raw_path in "${PLANNED_FILES[@]}"; do
     path="$(normalize_path "$raw_path")"
@@ -274,6 +388,11 @@ if (( ${#UNAPPROVED_GLOBS[@]} > 0 )); then
     done
     echo
 fi
+if (( ${#INVALID_SHARED_FILES[@]} > 0 )); then
+    echo "[PLAN_INVALID] (${#INVALID_SHARED_FILES[@]}) invalid shared-file approvals"
+    printf '  !!  %s\n' "${INVALID_SHARED_FILES[@]}"
+    echo
+fi
 
 declare -a CHANGED_FILES=()
 pushd "$REPO_ROOT" >/dev/null
@@ -286,6 +405,11 @@ else
 fi
 popd >/dev/null
 
+FEATURE_CONFLICTS=()
+while IFS= read -r conflict; do
+    [[ -n "$conflict" ]] && FEATURE_CONFLICTS+=("$conflict")
+done < <(get_feature_plan_conflicts | sort -u)
+
 if (( ${#CHANGED_FILES[@]} == 0 )); then
     echo '[INFO] No changed files detected.'
 else
@@ -296,6 +420,7 @@ fi
 
 declare -a WORKFLOW_CHANGES=()
 declare -a IN_SCOPE=()
+declare -a SHARED_SCOPE=()
 declare -a SCOPE_CREEP=()
 
 for file in "${CHANGED_FILES[@]}"; do
@@ -310,6 +435,19 @@ for file in "${CHANGED_FILES[@]}"; do
     fi
     if (( is_feature_workflow == 1 || is_legacy_workflow == 1 )); then
         WORKFLOW_CHANGES+=("$file")
+        continue
+    fi
+    conflict_found=0
+    for conflict in "${FEATURE_CONFLICTS[@]}"; do
+        [[ "$conflict" == "$file ("* ]] && conflict_found=1
+    done
+    (( conflict_found == 1 )) && continue
+    if has_valid_shared_file_approval "$file"; then
+        SHARED_SCOPE+=("$file")
+        continue
+    fi
+    if is_shared_project_file "$file"; then
+        SCOPE_CREEP+=("$file (shared file requires an approved_shared_files record)")
         continue
     fi
     matched=0
@@ -357,6 +495,16 @@ if (( ${#SCOPE_CREEP[@]} > 0 )); then
     printf '  !!  %s\n' "${SCOPE_CREEP[@]}"
     echo
 fi
+if (( ${#SHARED_SCOPE[@]} > 0 )); then
+    echo "[SHARED_SCOPE] (${#SHARED_SCOPE[@]} files) - explicit shared-file approval:"
+    printf '  OK  %s\n' "${SHARED_SCOPE[@]}"
+    echo
+fi
+if (( ${#FEATURE_CONFLICTS[@]} > 0 )); then
+    echo "[CONFLICT] (${#FEATURE_CONFLICTS[@]} files) - another feature claims the changed file:"
+    printf '  !!  %s\n' "${FEATURE_CONFLICTS[@]}"
+    echo
+fi
 if (( ${#MISSING[@]} > 0 )); then
     echo "[MISSING] (${#MISSING[@]} files) - exact planned files not present:"
     printf '  ??  %s\n' "${MISSING[@]}"
@@ -386,7 +534,7 @@ json_array() {
 }
 
 clean=true
-if (( ${#INVALID_PLAN[@]} > 0 || ${#UNAPPROVED_GLOBS[@]} > 0 || ${#SCOPE_CREEP[@]} > 0 || ${#MISSING[@]} > 0 )); then
+if (( ${#INVALID_PLAN[@]} > 0 || ${#UNAPPROVED_GLOBS[@]} > 0 || ${#INVALID_SHARED_FILES[@]} > 0 || ${#FEATURE_CONFLICTS[@]} > 0 || ${#SCOPE_CREEP[@]} > 0 || ${#MISSING[@]} > 0 )); then
     clean=false
 fi
 echo '--- JSON Summary ---'
@@ -394,8 +542,14 @@ printf '{"planned":%d,"changed":%d,"workflow":' "${#PLAN_PATTERNS[@]}" "${#CHANG
 json_array "${WORKFLOW_CHANGES[@]}"
 printf '%s' ',"in_scope":'
 json_array "${IN_SCOPE[@]}"
+printf '%s' ',"shared_scope":'
+json_array "${SHARED_SCOPE[@]}"
 printf '%s' ',"scope_creep":'
 json_array "${SCOPE_CREEP[@]}"
+printf '%s' ',"conflicts":'
+json_array "${FEATURE_CONFLICTS[@]}"
+printf '%s' ',"invalid_shared_files":'
+json_array "${INVALID_SHARED_FILES[@]}"
 printf '%s' ',"missing":'
 json_array "${MISSING[@]}"
 printf '%s' ',"invalid_plan":'
@@ -404,7 +558,7 @@ printf '%s' ',"unapproved_globs":'
 json_array "${UNAPPROVED_GLOBS[@]}"
 printf ',"clean":%s}\n' "$clean"
 
-if (( ${#INVALID_PLAN[@]} > 0 || ${#UNAPPROVED_GLOBS[@]} > 0 )); then
+if (( ${#INVALID_PLAN[@]} > 0 || ${#UNAPPROVED_GLOBS[@]} > 0 || ${#INVALID_SHARED_FILES[@]} > 0 || ${#FEATURE_CONFLICTS[@]} > 0 )); then
     exit 2
 fi
 if (( ${#SCOPE_CREEP[@]} > 0 || ${#MISSING[@]} > 0 )); then

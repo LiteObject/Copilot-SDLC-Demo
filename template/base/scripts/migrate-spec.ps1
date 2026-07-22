@@ -241,6 +241,7 @@ else {
     foreach ($file in $plannedFiles) { [void]$metadataLines.Add("  - $file") }
 }
 [void]$metadataLines.Add('approved_globs: []')
+[void]$metadataLines.Add('approved_shared_files: []')
 foreach ($gate in @('requirements', 'config', 'install', 'design', 'planning', 'build', 'security', 'review', 'test', 'lint', 'type_check', 'package', 'deploy', 'sbom', 'smoke_test', 'rollback', 'release', 'deployment_readiness', 'ai_governance', 'ai_lifecycle', 'measurement')) {
     foreach ($line in @(
             ('gate_' + $gate + '_command: ""'),

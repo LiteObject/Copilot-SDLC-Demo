@@ -93,8 +93,9 @@ function Read-WorkflowMetadata {
 
     $values = @{}
     $lists = @{
-        planned_files  = @()
-        approved_globs = @()
+        planned_files          = @()
+        approved_globs         = @()
+        approved_shared_files  = @()
     }
     $activeList = $null
 
@@ -108,7 +109,7 @@ function Read-WorkflowMetadata {
             $value = ConvertFrom-YamlScalar $Matches.value
             $values[$key] = $value
             $activeList = $null
-            if ($key -in @('planned_files', 'approved_globs')) {
+            if ($key -in @('planned_files', 'approved_globs', 'approved_shared_files')) {
                 if ($value -eq '[]') {
                     $lists[$key] = @()
                 }
@@ -196,7 +197,7 @@ function Get-CurrentTreeDigest {
     $parts = New-Object System.Collections.Generic.List[string]
     Push-Location $Root
     try {
-        $diff = (& git diff --binary HEAD -- . ":(exclude)$SpecRelativePath" ':(exclude).sdlc/**' 2>$null | Out-String)
+        $diff = (& git diff --binary HEAD -- . ":(exclude)$SpecRelativePath" ':(exclude)docs/specs/**/tasks.json' ':(exclude).sdlc/**' 2>$null | Out-String)
         if ($LASTEXITCODE -ne 0) {
             return ''
         }
@@ -357,6 +358,36 @@ function Test-ConfiguredTaskGates {
         if (-not (Test-GateRecord -Name $task -AllowedResults @('PASS') -Metadata $Metadata -ExpectedCommitSha $ExpectedCommitSha -ExpectedTreeDigest $ExpectedTreeDigest -Root $Root)) { $passed = $false }
     }
     return $passed
+}
+
+function Test-TaskGraphGate {
+    param(
+        [string] $Root,
+        [string] $CurrentFeatureId,
+        [string] $CurrentSpecPath,
+        [string] $TargetPhase,
+        [string] $ExpectedCommitSha,
+        [string] $ExpectedTreeDigest
+    )
+
+    if (-not $CurrentFeatureId -or $TargetPhase -notin @('CODING', 'REVIEW', 'TESTING', 'DEPLOYMENT_READINESS', 'DONE')) { return $true }
+    $tasksPath = Join-Path $Root "docs/specs/$CurrentFeatureId/tasks.json"
+    if (-not (Test-Path -LiteralPath $tasksPath -PathType Leaf)) { return $true }
+    $taskGraphPath = Join-Path $PSScriptRoot 'task-graph.py'
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($null -eq $python) { $python = Get-Command python3 -ErrorAction SilentlyContinue }
+    if ($null -eq $python) {
+        Write-Host '[FAIL] Python 3 is required when a feature tasks.json exists.'
+        return $false
+    }
+    $output = & $python.Source $taskGraphPath validate --repo-root $Root --feature-id $CurrentFeatureId --spec-path $CurrentSpecPath --target-phase $TargetPhase --commit-sha $ExpectedCommitSha --tree-digest $ExpectedTreeDigest 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host '[FAIL] Task graph gate failed:'
+        $output | ForEach-Object { Write-Host "  $_" }
+        return $false
+    }
+    Write-Host "[PASS] Task graph is valid for feature '$CurrentFeatureId' and target phase '$TargetPhase'."
+    return $true
 }
 
 function Get-SectionBody {
@@ -660,6 +691,8 @@ if ($currentState -eq 'TESTING' -and $targetPhase -eq 'DONE' -and $deploymentRea
 
 $expectedCommitSha = if ($CommitSha) { $CommitSha } else { Get-CurrentCommitSha -Root $RepoRoot }
 $expectedTreeDigest = if ($TreeDigest) { $TreeDigest } else { Get-CurrentTreeDigest -Root $RepoRoot -SpecRelativePath $script:SpecRelativePath }
+$taskGraphValid = Test-TaskGraphGate -Root $RepoRoot -CurrentFeatureId $FeatureId -CurrentSpecPath $SpecPath -TargetPhase $targetPhase -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest
+if (-not $taskGraphValid) { $allPassed = $false }
 $phase2Enabled = Test-Phase2Config -Root $RepoRoot
 $securityReviewRequired = $securityGateEnabled
 $releaseAssuranceEnabled = Test-ReleaseAssuranceEnabled -Root $RepoRoot

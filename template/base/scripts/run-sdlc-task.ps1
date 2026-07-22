@@ -13,6 +13,10 @@
     smoke_test, rollback, health_check, telemetry_check, failure_drill,
     post_release_check, measurement_baseline, measurement_snapshot,
     measurement_review, or all. Defaults to all.
+
+.PARAMETER TaskId
+    Feature task ID that receives the structured evidence. The configured Task
+    remains the verification command that was executed.
 #>
 [CmdletBinding()]
 param(
@@ -23,6 +27,7 @@ param(
     [string] $EvidenceDirectory,
     [string] $SpecPath,
     [string] $FeatureId,
+    [string] $TaskId,
     [switch] $RecordSpec
 )
 
@@ -130,7 +135,7 @@ function Get-GitValue {
 }
 function Get-TreeDigest {
     param([string] $Root, [string] $SpecRelativePath)
-    $payload = Get-GitValue -Root $Root -Arguments @('diff', '--binary', 'HEAD', '--', '.', ":(exclude)$SpecRelativePath", ':(exclude).sdlc/**')
+    $payload = Get-GitValue -Root $Root -Arguments @('diff', '--binary', 'HEAD', '--', '.', ":(exclude)$SpecRelativePath", ':(exclude)docs/specs/**/tasks.json', ':(exclude).sdlc/**')
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try { return (($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($payload)) | ForEach-Object { $_.ToString('x2') }) -join '') }
     finally { $sha.Dispose() }
@@ -156,8 +161,23 @@ function Set-SpecMetadata {
     $newline = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
     [System.IO.File]::WriteAllText($Path, ($lines -join $newline), (New-Object System.Text.UTF8Encoding($false)))
 }
+function Sync-TaskGraphEvidence {
+    param([string] $RecordPath)
+    if (-not $script:FeatureId -or -not $TaskId) { return }
+    $tasksPath = Join-Path $RepoRoot "docs/specs/$($script:FeatureId)/tasks.json"
+    if (-not (Test-Path -LiteralPath $tasksPath -PathType Leaf)) { return }
+    $taskGraphPath = Join-Path $PSScriptRoot 'task-graph.py'
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($null -eq $python) { $python = Get-Command python3 -ErrorAction SilentlyContinue }
+    if ($null -eq $python) { throw 'Python 3 is required when a feature tasks.json exists.' }
+    $output = & $python.Source $taskGraphPath record-evidence --repo-root $RepoRoot --feature-id $script:FeatureId --record-path $RecordPath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $output | ForEach-Object { Write-Host "[TASK_GRAPH] $_" }
+        throw "Could not record task evidence in $tasksPath."
+    }
+}
 function Invoke-Task {
-    param([string] $TaskName, [hashtable] $TaskConfig, [string] $EvidenceRoot, [string] $CommitSha, [string] $TreeDigest)
+    param([string] $TaskName, [string] $EvidenceTaskId, [hashtable] $TaskConfig, [string] $EvidenceRoot, [string] $CommitSha, [string] $TreeDigest)
     $executable = [string]$TaskConfig.executable
     $arguments = @($TaskConfig.args)
     $command = Get-CommandDisplay -Executable $executable -Arguments $arguments
@@ -175,8 +195,9 @@ function Invoke-Task {
     $finished = [DateTime]::UtcNow
     $result = if ($exitCode -eq 0) { 'PASS' } else { 'FAIL' }
     $relativeLog = $logPath.Substring(((Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar).Length) -replace '\\', '/'
-    $record = [ordered]@{ schema = 1; kind = 'sdlc-task'; task = $TaskName; executable = $executable; args = @($arguments); command = $command; feature_id = $script:FeatureId; spec_path = $script:SpecRelativePath; commit_sha = $CommitSha; tree_digest = $TreeDigest; started_at = $started.ToString('yyyy-MM-ddTHH:mm:ssZ'); finished_at = $finished.ToString('yyyy-MM-ddTHH:mm:ssZ'); exit_code = $exitCode; result = $result; evidence = $relativeLog }
+    $record = [ordered]@{ schema = 1; kind = 'sdlc-task'; task = $EvidenceTaskId; verification_task = $TaskName; executable = $executable; args = @($arguments); command = $command; feature_id = $script:FeatureId; spec_path = $script:SpecRelativePath; commit_sha = $CommitSha; tree_digest = $TreeDigest; started_at = $started.ToString('yyyy-MM-ddTHH:mm:ssZ'); finished_at = $finished.ToString('yyyy-MM-ddTHH:mm:ssZ'); exit_code = $exitCode; result = $result; evidence = $relativeLog }
     $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $recordPath -Encoding utf8
+    Sync-TaskGraphEvidence -RecordPath $recordPath
     if ($RecordSpec) {
         $updates = @{
             ("gate_${TaskName}_command") = $command
@@ -225,7 +246,8 @@ foreach ($taskName in $taskNames) {
     if ($seen.ContainsKey($taskName)) { continue }
     $seen[$taskName] = $true
     if (-not $config.Tasks.ContainsKey($taskName)) { Write-Host "[FAIL] Task '$taskName' is not configured."; exit 1 }
-    $exitCode = Invoke-Task -TaskName $taskName -TaskConfig $config.Tasks[$taskName] -EvidenceRoot $evidenceRoot -CommitSha $commitSha -TreeDigest $treeDigest
+    $evidenceTaskId = if ($TaskId) { $TaskId } else { $taskName }
+    $exitCode = Invoke-Task -TaskName $taskName -EvidenceTaskId $evidenceTaskId -TaskConfig $config.Tasks[$taskName] -EvidenceRoot $evidenceRoot -CommitSha $commitSha -TreeDigest $treeDigest
     if ($exitCode -ne 0) { exit $exitCode }
 }
 Write-Host "[PASS] SDLC task run complete: $($taskNames -join ', ')"

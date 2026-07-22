@@ -11,6 +11,8 @@ These rules apply to every agent in this workspace (Supervisor, PM, Architect, D
 - The project moves through the state machine recorded in the YAML front matter of [docs/spec.md](../docs/spec.md): `GATHERING_REQS → [DESIGN] → PLANNING → CODING → REVIEW → TESTING → [DEPLOYMENT_READINESS] → DONE`, with explicit review and failure loops. The visible state fields must match the metadata.
 - Workers return gate results and evidence; only the Supervisor changes `current_phase`, `review_cycle`, gate records, and `last_transition_*`. Run `scripts/check-phase.ps1` or `scripts/check-phase.sh` with the target phase before every transition.
 - Resolve a feature context before reading workflow state when work is feature-scoped. Use `docs/specs/<feature-id>/spec.md`, pass `-FeatureId <id>` / `--feature-id <id>` to every validator, runner, migration, and optional extension, and keep evidence under `.sdlc/evidence/<feature-id>/`. No global active-feature file is permitted; no feature ID preserves legacy `docs/spec.md` behavior.
+- Shared configuration, manifests, lockfiles, and workflows require an exact `approved_shared_files` record in the selected feature spec; do not treat `planned_files` alone as shared-file approval.
+- Feature task graphs live at `docs/specs/<feature-id>/tasks.json`. Validate them with `python scripts/task-graph.py validate --feature-id <id>`; use `-TaskId` / `--task-id` when recording verification evidence. A task cannot satisfy REVIEW or DONE without the required status and current evidence.
 - Do not skip ahead: code is only written after requirements are clear and a plan exists.
 - **Before advancing state**, the Supervisor runs `scripts/check-phase.ps1` (or `.sh`) to validate that prerequisite sections in `docs/spec.md` are populated. Do not advance if the script fails.
 - The **Developer must verify the project builds cleanly** before handing off to REVIEW.
@@ -55,6 +57,8 @@ Phase-specific standards are in `.github/instructions/`:
 Utility scripts in `scripts/` reduce LLM hallucination risk for deterministic checks:
 - `check-phase.ps1` / `check-phase.sh` — validates `docs/spec.md` is well-formed and prerequisite sections are populated before advancing state.
 - `feature-context.ps1` / `feature-context.sh` — resolves normalized feature IDs, canonical feature specs, and namespaced evidence paths.
+- `task-graph.py` — validates per-feature task DAGs, mappings, task scope, statuses, and revision-bound evidence; it also records verification evidence and prints a graph summary.
+- `task-graph.py` — validates per-feature `tasks.json` DAGs, requirement and acceptance mappings, verification task IDs, scope paths, statuses, and revision-bound task evidence. A newly scaffolded graph is intentionally incomplete until the Architect populates it.
 - `migrate-spec.ps1` / `migrate-spec.sh` — explicitly migrates a legacy `docs/spec.md`, creates a backup, and initializes workflow metadata; it never writes without `-Force` / `--force`.
 - `validate-sdlc-config.ps1` / `validate-sdlc-config.sh` — validates schema, package manager/manifest, test directories, named tasks, command availability, and evidence settings; writes config evidence.
 - `run-sdlc-task.ps1` / `run-sdlc-task.sh` — runs structured install/build/test/lint/type-check tasks, retains logs and JSON evidence, and can update `docs/spec.md` gate records.

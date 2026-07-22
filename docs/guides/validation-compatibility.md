@@ -91,6 +91,44 @@ To migrate without overwriting the legacy spec, use
 `migrate-spec.sh --feature-id checkout-flow --force`; the legacy source remains
 in place and a backup is retained under `.sdlc/migrations/checkout-flow/`.
 
+Shared files require an explicit record in the feature spec:
+
+```yaml
+approved_shared_files:
+  - package.json|Add the checkout dependency|architect|fixture-commit|2026-07-21T00:00:00Z
+```
+
+The scope audit reports approved files as `[SHARED_SCOPE]`, rejects known shared
+surfaces without that record, and reports `[CONFLICT]` when another feature's
+plan claims the same changed file. Shared evidence remains feature-specific;
+one feature cannot consume another feature's gate evidence.
+
+## Task Graphs
+
+Feature-scoped work uses `docs/specs/<feature-id>/tasks.json` with
+`schema_version: 1`. Each task declares requirement and acceptance references,
+exact planned files, dependencies, configured verification task IDs, a status,
+and evidence. Run:
+
+```powershell
+python scripts/task-graph.py validate --feature-id checkout-flow
+python scripts/task-graph.py summary --feature-id checkout-flow
+scripts/run-sdlc-task.ps1 -Task test -TaskId TASK-002 -FeatureId checkout-flow
+```
+
+```bash
+python3 scripts/task-graph.py validate --feature-id checkout-flow
+python3 scripts/task-graph.py summary --feature-id checkout-flow
+scripts/run-sdlc-task.sh --task test --task-id TASK-002 --feature-id checkout-flow
+```
+
+The validator rejects duplicate IDs, dependency cycles, unknown dependencies
+or verification tasks, unmapped acceptance criteria, unsafe task paths, stale
+evidence, and `DONE` tasks without current passing evidence. `BLOCKED` tasks
+require an owner, rationale, approver, approval ID, and timestamp. The phase
+validator applies the same rules before `REVIEW` and `DONE`; task evidence is
+recorded without changing final task status.
+
 ## Release Assurance
 
 For deployable repositories, install the `release-assurance` extension and set

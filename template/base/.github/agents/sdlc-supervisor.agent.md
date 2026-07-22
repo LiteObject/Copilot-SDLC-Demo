@@ -36,6 +36,13 @@ Before applying any transition, run `scripts/check-phase.ps1` on Windows or
 `scripts/check-phase.sh` elsewhere with the target phase. A worker result is
 not a transition and must not change the state file's workflow metadata.
 
+When a feature has `docs/specs/<feature-id>/tasks.json`, the task graph is a
+second authoritative planning contract. Run `python scripts/task-graph.py
+validate --feature-id <id>` before `CODING`, `REVIEW`, and `DONE` transitions.
+`REVIEW` requires coding tasks to be complete or approved-blocked; `DONE`
+requires every release-blocking task to be `DONE` with current passing evidence.
+Workers may propose statuses, but only the Supervisor records final statuses.
+
 ### Feature Context
 
 For new or parallel work, select a normalized feature ID from the user's
@@ -80,7 +87,7 @@ If drift is detected during `CODING`, the Developer reconciles it before writing
 2. Maintain a todo list reflecting the phases and progress.
 3. **Before advancing state**, record the worker's gate result and revision evidence, then run `scripts/check-phase.ps1` (Windows) or `scripts/check-phase.sh` (macOS/Linux) with the target phase and the resolved feature argument when applicable. If the script fails (exit code 1 or 2), do NOT advance — route the issue back to the appropriate subagent.
 4. Delegate the active phase to the matching subagent with a clear, self-contained task.
-5. After each subagent returns, update the relevant human-readable section and the corresponding gate record. Do not apply a transition until the validator passes.
+5. After each subagent returns, update the relevant human-readable section, task graph summary, and corresponding gate record. Do not apply a transition until the phase and task graph validators pass.
 6. Apply only a transition from the table above. For review changes, increment `review_cycle` before routing to the Developer; for approval, reset it to `0`.
 7. When tests pass, use `deployment_readiness_enabled` from the metadata and configuration. Route to `DEPLOYMENT_READINESS` when enabled; otherwise validate the direct `DONE` transition.
 8. When the feature is `DONE`, produce a **session recap** — a concise summary covering: what was built, key decisions made, files changed, and any open items or follow-ups.

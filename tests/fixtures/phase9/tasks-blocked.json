@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "feature_id": "alpha",
+  "spec_path": "docs/specs/alpha/spec.md",
+  "manual_verifications": [],
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Blocked task",
+      "description": "A task intentionally blocked with an approved disposition.",
+      "requirement_refs": ["REQ-001"],
+      "acceptance_refs": ["AC-001"],
+      "depends_on": [],
+      "planned_files": ["src/alpha.txt"],
+      "verification_tasks": ["test"],
+      "status": "BLOCKED",
+      "release_blocking": false,
+      "blocked_disposition": {
+        "owner": "platform-team",
+        "rationale": "External fixture dependency is unavailable.",
+        "approver": "architect",
+        "approval_id": "APR-001",
+        "timestamp": "2026-07-21T00:00:00Z"
+      },
+      "evidence": []
+    }
+  ]
+}

@@ -20,6 +20,7 @@ last_transition_actor: ""
 last_transition_evidence: ""
 planned_files: []
 approved_globs: []
+approved_shared_files: []
 gate_requirements_command: ""
 gate_requirements_commit_sha: ""
 gate_requirements_tree_digest: ""
@@ -271,6 +272,9 @@ context and stores evidence under `.sdlc/evidence/<feature-id>/`.
 `planned_files` contains exact repository-relative files; directory entries are
 invalid. A glob requires a matching `approved_globs` record in the form
 `pattern|justification|approver|revision_commit_sha|timestamp`.
+Known shared files such as dependency manifests, lockfiles, workflow files, and
+shared configuration also require an `approved_shared_files` record in the same
+five-field form, even when listed in `planned_files`.
 
 ## Current State
 
@@ -334,6 +338,16 @@ tests/
 _(Architect — ordered files/modules, each mapped to the requirement(s) it satisfies. Developer checks items off.)_
 
 - [ ]
+
+## Task Graph
+
+_(Architect — feature-scoped `docs/specs/<feature-id>/tasks.json`. Every task
+maps requirements and acceptance criteria to exact files and verification
+tasks. The Supervisor is the only writer of final statuses.)_
+
+Task document: `docs/specs/<feature-id>/tasks.json`
+
+Graph status: NOT_VALIDATED
 
 ## Test Strategy
 

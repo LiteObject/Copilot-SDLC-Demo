@@ -95,6 +95,7 @@ fi
 declare -A META=()
 declare -a PLANNED_FILES=()
 declare -a APPROVED_GLOBS=()
+declare -a APPROVED_SHARED_FILES=()
 ACTIVE_LIST=""
 
 trim_value() {
@@ -125,7 +126,7 @@ while IFS= read -r line; do
         value="$(unquote_value "${BASH_REMATCH[2]}")"
         META["$key"]="$value"
         ACTIVE_LIST=""
-        if [[ "$key" == 'planned_files' || "$key" == 'approved_globs' ]]; then
+        if [[ "$key" == 'planned_files' || "$key" == 'approved_globs' || "$key" == 'approved_shared_files' ]]; then
             if [[ "$value" == '[]' ]]; then
                 :
             elif [[ -z "$value" ]]; then
@@ -373,7 +374,7 @@ get_current_commit_sha() {
 get_current_tree_digest() {
     local diff_payload untracked_file full_path file_hash
     local -a parts=()
-    diff_payload="$(git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude).sdlc/**' 2>/dev/null || true)"
+    diff_payload="$(git -C "$REPO_ROOT" diff --binary HEAD -- . ":(exclude)$SPEC_RELATIVE_PATH" ':(exclude)docs/specs/**/tasks.json' ':(exclude).sdlc/**' 2>/dev/null || true)"
     if ! git -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
         return 0
     fi
@@ -527,6 +528,29 @@ test_configured_task_gates() {
     return $((1 - passed))
 }
 
+test_task_graph_gate() {
+    [[ -n "$FEATURE_ID" && ( "$TARGET_PHASE" == 'CODING' || "$TARGET_PHASE" == 'REVIEW' || "$TARGET_PHASE" == 'TESTING' || "$TARGET_PHASE" == 'DEPLOYMENT_READINESS' || "$TARGET_PHASE" == 'DONE' ) ]] || return 0
+    [[ -f "$REPO_ROOT/docs/specs/$FEATURE_ID/tasks.json" ]] || return 0
+    local task_graph="$SCRIPT_DIR/task-graph.py" python_executable=''
+    [[ -f "$task_graph" ]] || { echo "[FAIL] Task graph validator not found: $task_graph"; return 1; }
+    for candidate in python3 python; do
+        if command -v "$candidate" >/dev/null 2>&1; then python_executable="$candidate"; break; fi
+    done
+    [[ -n "$python_executable" ]] || { echo '[FAIL] Python 3 is required when a feature tasks.json exists.'; return 1; }
+    local output
+    set +e
+    output="$($python_executable "$task_graph" validate --repo-root "$REPO_ROOT" --feature-id "$FEATURE_ID" --spec-path "$SPEC_PATH" --target-phase "$TARGET_PHASE" --commit-sha "$EXPECTED_COMMIT_SHA" --tree-digest "$EXPECTED_TREE_DIGEST" 2>&1)"
+    local graph_exit=$?
+    set -e
+    if (( graph_exit != 0 )); then
+        echo '[FAIL] Task graph gate failed:'
+        printf '  %s\n' "$output"
+        return 1
+    fi
+    echo "[PASS] Task graph is valid for feature '$FEATURE_ID' and target phase '$TARGET_PHASE'."
+    return 0
+}
+
 test_completion_extension_gates() {
     local passed=1
     if (( OPERATIONAL_READINESS_ENABLED == 1 )); then test_gate operational_readiness PASS || passed=0; fi
@@ -625,6 +649,8 @@ check_required_sections() {
     done
     return $((1 - passed))
 }
+
+test_task_graph_gate || ALL_PASSED=0
 
 if [[ "$CURRENT_STATE" == 'GATHERING_REQS' && "$TARGET_PHASE" == 'DESIGN' ||
       "$CURRENT_STATE" == 'GATHERING_REQS' && "$TARGET_PHASE" == 'PLANNING' ]]; then

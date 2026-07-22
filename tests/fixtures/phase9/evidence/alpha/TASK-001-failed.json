@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "kind": "sdlc-task",
+  "task": "TASK-001",
+  "command": "bash --version",
+  "feature_id": "alpha",
+  "spec_path": "docs/specs/alpha/spec.md",
+  "commit_sha": "fixture-commit",
+  "tree_digest": "fixture-tree",
+  "exit_code": 7,
+  "result": "FAIL",
+  "evidence": ".sdlc/evidence/alpha/TASK-001.log"
+}
