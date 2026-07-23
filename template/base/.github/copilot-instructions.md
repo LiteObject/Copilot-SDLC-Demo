@@ -66,6 +66,7 @@ Utility scripts in `scripts/` reduce LLM hallucination risk for deterministic ch
 - `scope-audit.ps1` / `scope-audit.sh` — compares git diff against the Implementation Plan and reports scope creep.
 - `validate-ai-governance.ps1` / `.sh` — validates approved AI providers, models, data boundaries, tools, sandboxes, and evaluation configuration when the `ai-governance` extension is selected.
 - `record-ai-change.ps1` / `.sh` — appends an auditable, approval-aware AI change record.
+- `check-autonomy.ps1` / `.sh` — evaluates graduated autonomy, scoped approvals, policy expiry, and bounded-loop limits when the `ai-governance` extension is selected.
 - `run-ai-governance.ps1` / `.sh` — runs the configured agent evaluation task and records revision-bound evidence.
 - `verification.py` — validates revision-bound changed-line coverage and mutation reports, records `PASS`, `FAIL`, or `NOT_APPLICABLE` evidence, and retains survivor dispositions.
 - The scaffold tools remain in the template authoring repository under `tools/`; they are not copied into the target project.

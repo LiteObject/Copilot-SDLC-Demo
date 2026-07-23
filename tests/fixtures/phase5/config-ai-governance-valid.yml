@@ -49,6 +49,15 @@ ai_governance:
   sandbox_type: worktree
   command_confirmation_required: true
   untrusted_input_policy: treat_as_data
+  autonomy_level: L1
+  policy_version: "v1"
+  policy_expires_at: "2099-12-31T23:59:59Z"
+  max_iterations: 3
+  max_changed_files: 5
+  allowed_branches: [main, feature/*]
+  action_classes: [read, analyze, propose, edit, command, local_validation, full_validation, branch, pull_request, pull_request_update, network_access, maintenance_batch, commit, merge, deploy, production_config, credential_rotation, secret_access, policy_change]
+  approval_requirements: [edit=none, command=human, local_validation=none, full_validation=none, branch=human, pull_request=human, pull_request_update=none, network_access=human, maintenance_batch=policy, commit=human, merge=human, deploy=human, production_config=human, credential_rotation=human, secret_access=human, policy_change=human]
+  approval_expiration_hours: 24
   evaluation_task: agent_evaluation
 tasks:
   build:

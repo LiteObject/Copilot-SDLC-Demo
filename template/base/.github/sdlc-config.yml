@@ -162,6 +162,17 @@ ai_governance:
   sandbox_type: worktree
   command_confirmation_required: true
   untrusted_input_policy: treat_as_data
+  # Graduated autonomy defaults to the safest level. Fill in the expiry and
+  # bounds before enabling ai_governance in a consuming repository.
+  autonomy_level: L0
+  policy_version: "v1"
+  policy_expires_at: ""
+  max_iterations: 1
+  max_changed_files: 0
+  allowed_branches: []
+  action_classes: [read, analyze, propose, edit, command, local_validation, full_validation, branch, pull_request, pull_request_update, network_access, maintenance_batch, commit, merge, deploy, production_config, credential_rotation, secret_access, policy_change]
+  approval_requirements: [edit=none, command=human, local_validation=none, full_validation=none, branch=human, pull_request=human, pull_request_update=none, network_access=human, maintenance_batch=policy, commit=human, merge=human, deploy=human, production_config=human, credential_rotation=human, secret_access=human, policy_change=human]
+  approval_expiration_hours: 24
   evaluation_task: agent_evaluation
 
 # Opt-in lifecycle controls for products that expose or depend on AI.

@@ -66,6 +66,25 @@ function Test-ContainsAll {
     }
 }
 
+function Normalize-AutonomyAction {
+    param([string] $Value)
+    $normalized = $Value.Trim().ToLowerInvariant().Replace('-', '_')
+    switch ($normalized) {
+        'inspect' { return 'read' }
+        'execute' { return 'command' }
+        'run_command' { return 'command' }
+        'validation' { return 'full_validation' }
+        'create_branch' { return 'branch' }
+        'create_pr' { return 'pull_request' }
+        'update_pr' { return 'pull_request_update' }
+        'network' { return 'network_access' }
+        'new_network_destination' { return 'network_access' }
+        'rotate_credentials' { return 'credential_rotation' }
+        'production_configuration' { return 'production_config' }
+        default { return $normalized }
+    }
+}
+
 function Test-Document {
     param([string] $Path, [string[]] $Terms, [string] $Name, [System.Collections.Generic.List[string]] $Errors)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -91,7 +110,7 @@ if (Test-Path -LiteralPath $baseValidator) {
 }
 
 $errors = New-Object System.Collections.Generic.List[string]
-$requiredValues = @('policy_path','permissions_path','threat_model_path','evaluation_plan_path','evaluation_scenarios_path','ledger_path','evaluation_evidence_path','approved_providers','approved_models','approved_tenants','permitted_repositories','allowed_data_classifications','prohibited_inputs','tool_allowlist','mcp_server_allowlist','network_destination_allowlist','credential_scope_allowlist','phase_tool_grants','restricted_actions','approval_required_actions','sandbox_type','untrusted_input_policy','evaluation_task')
+$requiredValues = @('policy_path','permissions_path','threat_model_path','evaluation_plan_path','evaluation_scenarios_path','ledger_path','evaluation_evidence_path','approved_providers','approved_models','approved_tenants','permitted_repositories','allowed_data_classifications','prohibited_inputs','tool_allowlist','mcp_server_allowlist','network_destination_allowlist','credential_scope_allowlist','phase_tool_grants','restricted_actions','approval_required_actions','sandbox_type','untrusted_input_policy','autonomy_level','policy_version','policy_expires_at','max_iterations','max_changed_files','allowed_branches','action_classes','approval_requirements','approval_expiration_hours','evaluation_task')
 foreach ($name in $requiredValues) {
     if ([string]::IsNullOrWhiteSpace((Get-GovernanceValue -Body $body -Name $name))) { Add-GovernanceError $errors "ai_governance.$name is required." }
 }
@@ -105,6 +124,24 @@ if ($sandboxRequired -eq 'true' -and (Get-GovernanceValue -Body $body -Name 'san
 if ((Get-GovernanceValue -Body $body -Name 'sandbox_type') -notin @('worktree','container','vm','none')) { Add-GovernanceError $errors 'sandbox_type must be worktree, container, vm, or none.' }
 if ((Get-GovernanceValue -Body $body -Name 'command_confirmation_required') -ne 'true') { Add-GovernanceError $errors 'command_confirmation_required must be true.' }
 if ((Get-GovernanceValue -Body $body -Name 'untrusted_input_policy') -ne 'treat_as_data') { Add-GovernanceError $errors 'untrusted_input_policy must be treat_as_data.' }
+$autonomyLevel = Get-GovernanceValue -Body $body -Name 'autonomy_level'
+if ($autonomyLevel -notin @('L0','L1','L2','L3','L4')) { Add-GovernanceError $errors 'autonomy_level must be L0, L1, L2, L3, or L4.' }
+$policyVersion = Get-GovernanceValue -Body $body -Name 'policy_version'
+if ([string]::IsNullOrWhiteSpace($policyVersion)) { Add-GovernanceError $errors 'policy_version must not be empty.' }
+$policyExpiresAt = Get-GovernanceValue -Body $body -Name 'policy_expires_at'
+$parsedPolicyExpiry = [DateTimeOffset]::MinValue
+if ($policyExpiresAt -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$' -or -not [DateTimeOffset]::TryParse($policyExpiresAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsedPolicyExpiry)) {
+    Add-GovernanceError $errors 'policy_expires_at must be an ISO-8601 UTC timestamp ending in Z.'
+}
+elseif ($parsedPolicyExpiry -le [DateTimeOffset]::UtcNow) {
+    Add-GovernanceError $errors 'policy_expires_at has expired.'
+}
+$maxIterations = 0
+if (-not [int]::TryParse((Get-GovernanceValue -Body $body -Name 'max_iterations'), [ref]$maxIterations) -or $maxIterations -lt 1) { Add-GovernanceError $errors 'max_iterations must be a positive integer.' }
+$maxChangedFiles = 0
+if (-not [int]::TryParse((Get-GovernanceValue -Body $body -Name 'max_changed_files'), [ref]$maxChangedFiles) -or $maxChangedFiles -lt 0) { Add-GovernanceError $errors 'max_changed_files must be a non-negative integer.' }
+$approvalExpirationHours = 0
+if (-not [int]::TryParse((Get-GovernanceValue -Body $body -Name 'approval_expiration_hours'), [ref]$approvalExpirationHours) -or $approvalExpirationHours -lt 1) { Add-GovernanceError $errors 'approval_expiration_hours must be a positive integer.' }
 
 $retention = 0
 $retentionText = Get-GovernanceValue -Body $body -Name 'audit_retention_days' -Default (Get-GovernanceValue -Body $body -Name 'retention_days')
@@ -120,7 +157,10 @@ $tools = @(Get-GovernanceList -Body $body -Name 'tool_allowlist')
 $grants = @(Get-GovernanceList -Body $body -Name 'phase_tool_grants')
 $restrictedActions = @(Get-GovernanceList -Body $body -Name 'restricted_actions')
 $approvalActions = @(Get-GovernanceList -Body $body -Name 'approval_required_actions')
-foreach ($name in @('approved_providers','approved_models','approved_tenants','permitted_repositories','allowed_data_classifications','prohibited_inputs','tool_allowlist','mcp_server_allowlist','network_destination_allowlist','credential_scope_allowlist','phase_tool_grants','restricted_actions','approval_required_actions')) {
+$allowedBranches = @(Get-GovernanceList -Body $body -Name 'allowed_branches')
+$actionClasses = @(Get-GovernanceList -Body $body -Name 'action_classes')
+$approvalRequirements = @(Get-GovernanceList -Body $body -Name 'approval_requirements')
+foreach ($name in @('approved_providers','approved_models','approved_tenants','permitted_repositories','allowed_data_classifications','prohibited_inputs','tool_allowlist','mcp_server_allowlist','network_destination_allowlist','credential_scope_allowlist','phase_tool_grants','restricted_actions','approval_required_actions','allowed_branches','action_classes','approval_requirements')) {
     if (-not (Get-GovernanceValue -Body $body -Name $name).StartsWith('[')) { Add-GovernanceError $errors "ai_governance.$name must be an inline YAML list." }
 }
 if ($approvedProviders.Count -eq 0) { Add-GovernanceError $errors 'approved_providers must not be empty.' }
@@ -132,6 +172,22 @@ Test-ContainsAll $prohibitedInputs @('secrets','credentials','personal_data','un
 Test-ContainsAll $tools @('read','search') 'tool_allowlist' $errors
 Test-ContainsAll $restrictedActions @('commit','merge','deploy','rotate_credentials','production_config') 'restricted_actions' $errors
 Test-ContainsAll $approvalActions @('commit','merge','deploy','rotate_credentials','production_config') 'approval_required_actions' $errors
+$knownActions = @('read','analyze','propose','edit','command','local_validation','full_validation','branch','pull_request','pull_request_update','network_access','maintenance_batch','commit','merge','deploy','production_config','credential_rotation','secret_access','policy_change')
+$normalizedActionClasses = @($actionClasses | ForEach-Object { Normalize-AutonomyAction $_ })
+foreach ($action in $normalizedActionClasses) { if ($action -notin $knownActions) { Add-GovernanceError $errors "Unsupported action class: $action." } }
+foreach ($branch in $allowedBranches) { if ([string]::IsNullOrWhiteSpace($branch) -or $branch -match '\s|\.\.') { Add-GovernanceError $errors "Invalid allowed branch pattern: $branch." } }
+$requirementMap = @{}
+foreach ($entry in $approvalRequirements) {
+    if ($entry -notmatch '^([^=]+)=(human|policy|none)$') { Add-GovernanceError $errors "Invalid approval requirement: $entry."; continue }
+    $requirementMap[(Normalize-AutonomyAction $Matches[1])] = $Matches[2]
+}
+$normalizedApprovalActions = @($approvalActions | ForEach-Object { Normalize-AutonomyAction $_ })
+foreach ($action in $restrictedActions) {
+    $normalized = Normalize-AutonomyAction $action
+    if ($normalized -notin $normalizedActionClasses) { Add-GovernanceError $errors "Restricted action must be listed in action_classes: $normalized." }
+    if ($normalized -notin $normalizedApprovalActions) { Add-GovernanceError $errors "Restricted action must require approval: $normalized." }
+    if ($requirementMap[$normalized] -ne 'human') { Add-GovernanceError $errors "Restricted action must have a human approval requirement: $normalized." }
+}
 
 foreach ($grant in $grants) {
     if ($grant -notmatch '^[A-Z_]+=([^,]+)$') { Add-GovernanceError $errors "Invalid phase_tool_grants entry: $grant" }

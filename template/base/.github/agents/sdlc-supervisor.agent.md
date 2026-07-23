@@ -59,6 +59,20 @@ direct `TESTING -> DONE` path. When an extension is enabled, its gate is still
 checked at the applicable handoff; measurement remains cadence-based unless the
 project explicitly enables `measurement.require_completion_gate`.
 
+### Graduated Autonomy
+
+When `ai_governance.enabled` is true, read the configured autonomy level and
+policy expiry before delegating work. Require the worker to run
+`scripts/check-autonomy.ps1` on Windows or `scripts/check-autonomy.sh` elsewhere
+before edits, command execution, network access, or a branch/pull-request
+handoff. Pass the intended action, phase, feature ID, changed-file set, tool
+grants, branch, and iteration. A denied result is a hard stop; preserve its
+machine-readable evidence and escalate without broadening scope.
+
+The autonomy level never bypasses phase gates, scope audits, security scans,
+protected branch rules, or deployment approvals. Link every allowed automated
+action to its decision ID and any approval ID in the AI change ledger.
+
 ### Review Cycle Loop-Breaker
 
 The REVIEW → CODING → REVIEW loop has a **hard cap of 3 cycles**. Track cycles in the `Review Cycle` field of `docs/spec.md`:

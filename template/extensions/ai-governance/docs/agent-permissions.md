@@ -29,6 +29,19 @@ credential scope is allowed.
 Use the least privilege required by the current phase. A grant in one phase
 does not carry forward automatically.
 
+## Autonomy Policy
+
+`ai_governance.autonomy_level` selects the maximum graduated level. The policy
+must also declare `policy_version`, `policy_expires_at`, `max_iterations`,
+`max_changed_files`, `allowed_branches`, `action_classes`,
+`approval_requirements`, and `approval_expiration_hours`. An absent or invalid
+policy is fail-closed and permits only L0 read, analyze, and propose actions.
+
+Run `scripts/check-autonomy.ps1` or `scripts/check-autonomy.sh` before edits,
+commands, network access, and branch or pull-request handoffs. Keep the JSONL
+decision evidence with the selected feature evidence directory. The decision
+ID and approval ID must be passed to the AI change ledger.
+
 ## Restricted Actions
 
 Commit, merge, deploy, credential rotation, and production configuration changes
@@ -40,3 +53,14 @@ Sandbox type: `worktree`
 Sandbox required: `true`
 
 Command confirmation required: `true`
+
+## Approval Record
+
+Store approvals as machine-readable records with these fields:
+
+`approval_id`, `approver`, `action`, `scope`, `policy_version`, `timestamp`,
+`expiration`, `decision`, and `evidence`.
+
+The scope must identify the applicable feature, phase, branch, and changed-file
+patterns when those boundaries apply. An approval outside its scope or after
+its expiration is invalid.

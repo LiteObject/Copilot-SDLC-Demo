@@ -37,6 +37,11 @@ jobs:
               shell: bash
               run: bash scripts/validate-ai-governance.sh
 
+            - name: Check safe autonomy decision
+              if: steps.ai-governance-config.outputs.enabled == 'true'
+              shell: bash
+              run: bash scripts/check-autonomy.sh --action read --phase GATHERING_REQS --decision-id "CI-${{ github.run_id }}"
+
             - name: Run agent evaluation
               if: steps.ai-governance-config.outputs.enabled == 'true' && (github.event_name != 'workflow_dispatch' || inputs.run_evaluation == true)
               shell: bash

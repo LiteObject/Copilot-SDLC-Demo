@@ -21,6 +21,10 @@ param(
     [string[]] $Validation = @(),
     [string[]] $HumanApproval = @(),
     [string[]] $Action = @(),
+    [string] $AutonomyDecisionId = '',
+    [string] $AutonomyDecision = '',
+    [string] $ApprovalId = '',
+    [string] $AutonomyEvidence = '',
     [ValidateSet('APPROVED','REJECTED','PENDING')]
     [string] $FinalDisposition = 'PENDING',
     [string] $ConfigPath,
@@ -119,6 +123,9 @@ if ($ToolGrant.Count -eq 0) { Add-GovernanceError $errors 'At least one -ToolGra
 if ($ToolCall.Count -eq 0) { Add-GovernanceError $errors 'At least one -ToolCall is required.' }
 if ($ChangedFile.Count -eq 0) { Add-GovernanceError $errors 'At least one -ChangedFile is required.' }
 if ($Validation.Count -eq 0) { Add-GovernanceError $errors 'At least one -Validation result is required.' }
+if ($Action.Count -gt 0 -and ([string]::IsNullOrWhiteSpace($AutonomyDecisionId) -or $AutonomyDecision -notin @('ALLOW','DENY'))) { Add-GovernanceError $errors 'Action-bearing records require an autonomy decision ID and ALLOW or DENY decision.' }
+if ($AutonomyDecision -eq 'DENY' -and $FinalDisposition -eq 'APPROVED') { Add-GovernanceError $errors 'A denied autonomy decision cannot have an APPROVED final disposition.' }
+if ($AutonomyEvidence -and -not (Test-SafeRelativePath $AutonomyEvidence)) { Add-GovernanceError $errors "Autonomy evidence must be repository-relative: $AutonomyEvidence" }
 
 $providers = @(Get-GovernanceList -Body $body -Name 'approved_providers')
 $models = @(Get-GovernanceList -Body $body -Name 'approved_models')
@@ -221,6 +228,18 @@ $record = [ordered]@{
     human_approvals = $approvalRecords.ToArray()
     validations = $validationRecords.ToArray()
     actions = @($Action)
+    autonomy_decision_id = $AutonomyDecisionId
+    autonomy_decision = if ($AutonomyDecision) { $AutonomyDecision } else { 'NOT_RECORDED' }
+    autonomy_approval_id = $ApprovalId
+    autonomy_evidence = $AutonomyEvidence
+    autonomy = [ordered]@{
+        decision_id = $AutonomyDecisionId
+        decision = if ($AutonomyDecision) { $AutonomyDecision } else { 'NOT_RECORDED' }
+        approval_id = $ApprovalId
+        evidence = $AutonomyEvidence
+        requested_actions = @($Action)
+        final_disposition = $FinalDisposition
+    }
     final_disposition = $FinalDisposition
     commit_sha = Get-GitValue -Root $RepoRoot -Arguments @('rev-parse','HEAD')
     tree_digest = Get-TreeDigest -Root $RepoRoot

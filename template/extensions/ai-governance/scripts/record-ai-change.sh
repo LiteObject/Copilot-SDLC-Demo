@@ -27,6 +27,10 @@ CHANGED_FILES=()
 VALIDATIONS=()
 HUMAN_APPROVALS=()
 ACTIONS=()
+AUTONOMY_DECISION_ID=''
+AUTONOMY_DECISION=''
+APPROVAL_ID=''
+AUTONOMY_EVIDENCE=''
 
 while (($# > 0)); do
 	case "$1" in
@@ -50,11 +54,15 @@ while (($# > 0)); do
 		--validation|--validation-result) [[ $# -ge 2 ]] || { echo "[FAIL] $1 requires a value."; exit 2; }; VALIDATIONS+=("$2"); shift 2 ;;
 		--human-approval|--approval) [[ $# -ge 2 ]] || { echo "[FAIL] $1 requires a value."; exit 2; }; HUMAN_APPROVALS+=("$2"); shift 2 ;;
 		--action) [[ $# -ge 2 ]] || { echo '[FAIL] --action requires a value.'; exit 2; }; ACTIONS+=("$2"); shift 2 ;;
+		--autonomy-decision-id) [[ $# -ge 2 ]] || { echo '[FAIL] --autonomy-decision-id requires a value.'; exit 2; }; AUTONOMY_DECISION_ID="$2"; shift 2 ;;
+		--autonomy-decision) [[ $# -ge 2 ]] || { echo '[FAIL] --autonomy-decision requires a value.'; exit 2; }; AUTONOMY_DECISION="$2"; shift 2 ;;
+		--approval-id) [[ $# -ge 2 ]] || { echo '[FAIL] --approval-id requires a value.'; exit 2; }; APPROVAL_ID="$2"; shift 2 ;;
+		--autonomy-evidence) [[ $# -ge 2 ]] || { echo '[FAIL] --autonomy-evidence requires a value.'; exit 2; }; AUTONOMY_EVIDENCE="$2"; shift 2 ;;
 		--final-disposition) [[ $# -ge 2 ]] || { echo '[FAIL] --final-disposition requires a value.'; exit 2; }; FINAL_DISPOSITION="$2"; shift 2 ;;
 		--config-path) [[ $# -ge 2 ]] || { echo '[FAIL] --config-path requires a value.'; exit 2; }; CONFIG_PATH="$2"; shift 2 ;;
 		--repo-root) [[ $# -ge 2 ]] || { echo '[FAIL] --repo-root requires a value.'; exit 2; }; REPO_ROOT="$2"; shift 2 ;;
 		--evidence-directory) [[ $# -ge 2 ]] || { echo '[FAIL] --evidence-directory requires a value.'; exit 2; }; EVIDENCE_DIRECTORY="$2"; shift 2 ;;
-		--help|-h) echo 'Usage: record-ai-change.sh --task-id ID --agent-role ROLE --provider PROVIDER --model MODEL --model-version VERSION --tenant TENANT --repository REPOSITORY --data-classification CLASS --instruction-version VERSION --phase PHASE --sandbox-reference REF --tool-grant TOOL --tool-call CALL --changed-file PATH --validation NAME=PASS --human-approval APPROVER|DECISION|REFERENCE [--action ACTION] [--final-disposition APPROVED|REJECTED|PENDING]'; exit 0 ;;
+		--help|-h) echo 'Usage: record-ai-change.sh --task-id ID --agent-role ROLE --provider PROVIDER --model MODEL --model-version VERSION --tenant TENANT --repository REPOSITORY --data-classification CLASS --instruction-version VERSION --phase PHASE --sandbox-reference REF --tool-grant TOOL --tool-call CALL --changed-file PATH --validation NAME=PASS --human-approval APPROVER|DECISION|REFERENCE [--action ACTION --autonomy-decision-id ID --autonomy-decision ALLOW|DENY] [--final-disposition APPROVED|REJECTED|PENDING]'; exit 0 ;;
 		*) echo "[FAIL] Unknown option: $1"; exit 2 ;;
 	esac
 done
@@ -70,7 +78,7 @@ get_list() { local field="$1" value item; value="$(get_value "$field")"; LIST_RE
 contains() { local expected="$1" actual; shift; for actual in "$@"; do [[ "$actual" == "$expected" ]] && return 0; done; return 1; }
 contains_or_wildcard() { local expected="$1" actual; shift; for actual in "$@"; do [[ "$actual" == "$expected" || "$actual" == '*' ]] && return 0; done; return 1; }
 safe_path() { local path="$1"; [[ -n "$path" && "$path" != /* && "$path" != ../* && "$path" != */../* && "$path" != '..' && ! "$path" =~ ^[A-Za-z]:/ ]]; }
-json_escape() { local value="$1"; value="${value//\\/\\\\}"; value="${value//"/\\"}"; value="${value//$'\r'/\r}"; value="${value//$'\n'/\n}"; printf '"%s"' "$value"; }
+json_escape() { local value="$1"; value="${value//\\/\\\\}"; value="${value//\"/\\\"}"; value="${value//$'\r'/\\r}"; value="${value//$'\n'/\\n}"; printf '"%s"' "$value"; }
 json_array() { local first=1 value; printf '['; for value in "$@"; do (( first == 0 )) && printf ','; json_escape "$value"; first=0; done; printf ']'; }
 get_commit_sha() { git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown'; }
 get_tree_digest() { if command -v sha256sum >/dev/null 2>&1; then git -C "$REPO_ROOT" diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>/dev/null | sha256sum | awk '{print $1}'; else git -C "$REPO_ROOT" diff --binary HEAD -- . ':(exclude)docs/spec.md' ':(exclude).sdlc/**' 2>/dev/null | shasum -a 256 | awk '{print $1}'; fi; }
@@ -87,6 +95,9 @@ for item in TASK_ID AGENT_ROLE PROVIDER MODEL MODEL_VERSION TENANT REPOSITORY DA
 [[ ${#TOOL_CALLS[@]} -gt 0 ]] || add_error 'At least one --tool-call is required.'
 [[ ${#CHANGED_FILES[@]} -gt 0 ]] || add_error 'At least one --changed-file is required.'
 [[ ${#VALIDATIONS[@]} -gt 0 ]] || add_error 'At least one --validation result is required.'
+if (( ${#ACTIONS[@]} > 0 )) && [[ -z "$AUTONOMY_DECISION_ID" || ( "$AUTONOMY_DECISION" != ALLOW && "$AUTONOMY_DECISION" != DENY ) ]]; then add_error 'Action-bearing records require an autonomy decision ID and ALLOW or DENY decision.'; fi
+if [[ "$AUTONOMY_DECISION" == DENY && "$FINAL_DISPOSITION" == APPROVED ]]; then add_error 'A denied autonomy decision cannot have an APPROVED final disposition.'; fi
+if [[ -n "$AUTONOMY_EVIDENCE" ]] && ! safe_path "$AUTONOMY_EVIDENCE"; then add_error "Autonomy evidence must be repository-relative: $AUTONOMY_EVIDENCE"; fi
 case "$FINAL_DISPOSITION" in APPROVED|REJECTED|PENDING) ;; *) add_error "Unsupported final disposition: $FINAL_DISPOSITION" ;; esac
 case "$PHASE" in GATHERING_REQS|DESIGN|PLANNING|CODING|REVIEW|TESTING|DEPLOYMENT_READINESS|DONE) ;; *) add_error "Unsupported phase: $PHASE" ;; esac
 
@@ -157,8 +168,15 @@ LEDGER_FULL_PATH="$REPO_ROOT/$LEDGER_PATH"
 mkdir -p "$(dirname "$LEDGER_FULL_PATH")"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 {
-	printf '{"schema":1,"kind":"sdlc-ai-change-ledger","task_id":'; json_escape "$TASK_ID"; printf ',"agent_role":'; json_escape "$AGENT_ROLE"; printf ',"provider":'; json_escape "$PROVIDER"; printf ',"model":'; json_escape "$MODEL"; printf ',"model_version":'; json_escape "$MODEL_VERSION"; printf ',"tenant":'; json_escape "$TENANT"; printf ',"repository":'; json_escape "$REPOSITORY"; printf ',"data_classification":'; json_escape "$DATA_CLASSIFICATION"; printf ',"instruction_version":'; json_escape "$INSTRUCTION_VERSION"; printf ',"sandbox_reference":'; json_escape "$SANDBOX_REFERENCE"; printf ',"tool_grants":'; json_array "${TOOL_GRANTS[@]}"; printf ',"tool_calls":'; json_array "${TOOL_CALLS[@]}"; printf ',"mcp_servers":'; json_array "${MCP_SERVERS[@]}"; printf ',"network_destinations":'; json_array "${NETWORK_DESTINATIONS[@]}"; printf ',"credential_scopes":'; json_array "${CREDENTIAL_SCOPES[@]}"; printf ',"changed_files":'; json_array "${CHANGED_FILES[@]}"; printf ',"human_approvals":[%s],"validations":[%s],"actions":' "$APPROVAL_JSON" "$VALIDATION_JSON"; json_array "${ACTIONS[@]}"; printf ',"final_disposition":'; json_escape "$FINAL_DISPOSITION"; printf ',"commit_sha":'; json_escape "$(get_commit_sha)"; printf ',"tree_digest":'; json_escape "$(get_tree_digest)"; printf ',"recorded_at":'; json_escape "$TIMESTAMP"; printf '}
-'
-} | sed "s/{\"schema\":1/{\"schema\":1,\"phase\":\"$PHASE\"/" >> "$LEDGER_FULL_PATH"
+	printf '{"schema":1,"kind":"sdlc-ai-change-ledger","task_id":'; json_escape "$TASK_ID"
+	printf ',"agent_role":'; json_escape "$AGENT_ROLE"; printf ',"provider":'; json_escape "$PROVIDER"; printf ',"model":'; json_escape "$MODEL"; printf ',"model_version":'; json_escape "$MODEL_VERSION"
+	printf ',"tenant":'; json_escape "$TENANT"; printf ',"repository":'; json_escape "$REPOSITORY"; printf ',"data_classification":'; json_escape "$DATA_CLASSIFICATION"; printf ',"instruction_version":'; json_escape "$INSTRUCTION_VERSION"
+	printf ',"phase":'; json_escape "$PHASE"; printf ',"sandbox_reference":'; json_escape "$SANDBOX_REFERENCE"; printf ',"tool_grants":'; json_array "${TOOL_GRANTS[@]}"; printf ',"tool_calls":'; json_array "${TOOL_CALLS[@]}"
+	printf ',"mcp_servers":'; json_array "${MCP_SERVERS[@]}"; printf ',"network_destinations":'; json_array "${NETWORK_DESTINATIONS[@]}"; printf ',"credential_scopes":'; json_array "${CREDENTIAL_SCOPES[@]}"; printf ',"changed_files":'; json_array "${CHANGED_FILES[@]}"
+	printf ',"human_approvals":[%s],"validations":[%s],"actions":' "$APPROVAL_JSON" "$VALIDATION_JSON"; json_array "${ACTIONS[@]}"
+	printf ',"autonomy_decision_id":'; json_escape "$AUTONOMY_DECISION_ID"; printf ',"autonomy_decision":'; json_escape "${AUTONOMY_DECISION:-NOT_RECORDED}"; printf ',"autonomy_approval_id":'; json_escape "$APPROVAL_ID"; printf ',"autonomy_evidence":'; json_escape "$AUTONOMY_EVIDENCE"
+	printf ',"autonomy":{"decision_id":'; json_escape "$AUTONOMY_DECISION_ID"; printf ',"decision":'; json_escape "${AUTONOMY_DECISION:-NOT_RECORDED}"; printf ',"approval_id":'; json_escape "$APPROVAL_ID"; printf ',"evidence":'; json_escape "$AUTONOMY_EVIDENCE"; printf ',"requested_actions":'; json_array "${ACTIONS[@]}"
+	printf ',"final_disposition":'; json_escape "$FINAL_DISPOSITION"; printf '},"final_disposition":'; json_escape "$FINAL_DISPOSITION"; printf ',"commit_sha":'; json_escape "$(get_commit_sha)"; printf ',"tree_digest":'; json_escape "$(get_tree_digest)"; printf ',"recorded_at":'; json_escape "$TIMESTAMP"; printf '%s\n' '}'
+} >> "$LEDGER_FULL_PATH"
 echo "[PASS] AI change recorded: $LEDGER_PATH"
 exit 0

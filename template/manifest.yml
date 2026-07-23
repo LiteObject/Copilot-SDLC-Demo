@@ -50,7 +50,7 @@ extensions:
     description: Observability, service objectives, incident response, runbooks, and production feedback controls.
   ai-governance:
     path: extensions/ai-governance
-    description: AI-assisted development policy, least-privilege permissions, prompt-injection resistance, audit ledger, and agent evaluation controls.
+    description: AI-assisted development policy, graduated autonomy, least-privilege permissions, prompt-injection resistance, audit ledger, and agent evaluation controls.
   ai-lifecycle:
     path: extensions/ai-lifecycle
     description: AI product impact assessment, inventory, evaluation, red-team, runtime safety, monitoring, rollback, and decommissioning controls.
