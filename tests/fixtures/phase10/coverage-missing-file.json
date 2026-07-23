@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "commit_sha": "fixture-commit",
+  "tree_digest": "fixture-tree",
+  "files": {}
+}

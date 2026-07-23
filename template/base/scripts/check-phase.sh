@@ -528,6 +528,129 @@ test_configured_task_gates() {
     return $((1 - passed))
 }
 
+get_config_section_value() {
+    local section="$1" key="$2" config_path="$REPO_ROOT/.github/sdlc-config.yml"
+    [[ -f "$config_path" ]] || return 0
+    awk -v section="$section" -v key="$key" '
+        { sub(/\r$/, "", $0) }
+        $0 == section ":" { inside = 1; next }
+        inside && /^[^[:space:]]/ { exit }
+        inside && $0 ~ "^[[:space:]]+" key ":[[:space:]]*" {
+            value = $0
+            sub("^[[:space:]]+" key ":[[:space:]]*", "", value)
+            sub(/[[:space:]]+#.*$/, "", value)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            gsub(/^"|"$/, "", value)
+            print value
+            exit
+        }
+    ' "$config_path"
+}
+
+get_config_section_list() {
+    local section="$1" key="$2" config_path="$REPO_ROOT/.github/sdlc-config.yml"
+    [[ -f "$config_path" ]] || return 0
+    awk -v section="$section" -v key="$key" '
+        { sub(/\r$/, "", $0) }
+        function emit(value, count, items, idx) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            if (value ~ /^\[.*\]$/) {
+                sub(/^\[/, "", value); sub(/\]$/, "", value)
+                count = split(value, items, ",")
+                for (idx = 1; idx <= count; idx++) {
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", items[idx])
+                    gsub(/^"|"$/, "", items[idx])
+                    if (items[idx] != "") print items[idx]
+                }
+            }
+        }
+        $0 == section ":" { inside = 1; next }
+        inside && /^[^[:space:]]/ { exit }
+        inside && $0 ~ "^[[:space:]]+" key ":[[:space:]]*" {
+            value = $0
+            sub("^[[:space:]]+" key ":[[:space:]]*", "", value)
+            sub(/[[:space:]]+#.*$/, "", value)
+            emit(value)
+            active = (value == "")
+            next
+        }
+        inside && active && /^[[:space:]]+-[[:space:]]*/ {
+            value = $0
+            sub(/^[[:space:]]+-[[:space:]]*/, "", value)
+            sub(/[[:space:]]+#.*$/, "", value)
+            gsub(/^"|"$/, "", value)
+            if (value != "") print value
+            next
+        }
+    ' "$config_path"
+}
+
+get_verification_contract() {
+    VERIFICATION_CONFIGURED=0
+    VERIFICATION_RISK_PROFILE=''
+    VERIFICATION_COVERAGE_ENABLED='false'
+    VERIFICATION_MUTATION_ENABLED='false'
+    VERIFICATION_COVERAGE_REQUIRED_PROFILES=()
+    VERIFICATION_MUTATION_REQUIRED_PROFILES=()
+    local config_path="$REPO_ROOT/.github/sdlc-config.yml"
+    [[ -f "$config_path" ]] || return 0
+    grep -Eq '^verification:[[:space:]]*$' "$config_path" || return 0
+    VERIFICATION_CONFIGURED=1
+    VERIFICATION_RISK_PROFILE="$(get_config_section_value quality_security risk_profile)"
+    VERIFICATION_COVERAGE_ENABLED="$(get_config_section_value verification coverage_enabled)"
+    VERIFICATION_MUTATION_ENABLED="$(get_config_section_value verification mutation_enabled)"
+    mapfile -t VERIFICATION_COVERAGE_REQUIRED_PROFILES < <(get_config_section_list verification coverage_required_risk_profiles)
+    mapfile -t VERIFICATION_MUTATION_REQUIRED_PROFILES < <(get_config_section_list verification mutation_required_risk_profiles)
+}
+
+test_verification_record() {
+    local kind="$1" prefix evidence python_executable='' output
+    prefix="gate_$kind"
+    evidence="${META[${prefix}_evidence]-}"
+    [[ -f "$SCRIPT_DIR/verification.py" ]] || { echo '[FAIL] Verification adapter not found.'; return 1; }
+    for candidate in python3 python; do
+        if command -v "$candidate" >/dev/null 2>&1; then python_executable="$candidate"; break; fi
+    done
+    [[ -n "$python_executable" ]] || { echo '[FAIL] Python 3 is required for verification evidence validation.'; return 1; }
+    set +e
+    output="$($python_executable "$SCRIPT_DIR/verification.py" validate-record --record-kind "$kind" --record-path "$evidence" --repo-root "$REPO_ROOT" --commit-sha "$EXPECTED_COMMIT_SHA" --tree-digest "$EXPECTED_TREE_DIGEST" 2>&1)"
+    local validation_exit=$?
+    set -e
+    if (( validation_exit != 0 )); then
+        echo "[FAIL] Verification '$kind' evidence is invalid: $output"
+        return 1
+    fi
+    echo "[PASS] Verification '$kind' evidence matches the current report and revision."
+    return 0
+}
+
+test_verification_gates() {
+    get_verification_contract
+    (( VERIFICATION_CONFIGURED == 1 )) || return 0
+    local passed=1 profile coverage_required=0 mutation_required=0
+    for profile in "${VERIFICATION_COVERAGE_REQUIRED_PROFILES[@]}"; do [[ "$profile" == "$VERIFICATION_RISK_PROFILE" ]] && coverage_required=1; done
+    for profile in "${VERIFICATION_MUTATION_REQUIRED_PROFILES[@]}"; do [[ "$profile" == "$VERIFICATION_RISK_PROFILE" ]] && mutation_required=1; done
+    if (( coverage_required == 1 )); then
+        if [[ "$VERIFICATION_COVERAGE_ENABLED" != true ]]; then
+            echo "[FAIL] Risk profile '$VERIFICATION_RISK_PROFILE' requires verification coverage to be enabled."
+            passed=0
+        else
+            test_gate coverage PASS || passed=0
+            test_verification_record coverage || passed=0
+        fi
+    fi
+    if (( mutation_required == 1 )); then
+        if [[ "$VERIFICATION_MUTATION_ENABLED" != true ]]; then
+            echo "[FAIL] Risk profile '$VERIFICATION_RISK_PROFILE' requires mutation verification to be enabled."
+            passed=0
+        else
+            test_gate mutation PASS || passed=0
+            test_verification_record mutation || passed=0
+        fi
+    fi
+    return $((1 - passed))
+}
+
 test_task_graph_gate() {
     [[ -n "$FEATURE_ID" && ( "$TARGET_PHASE" == 'CODING' || "$TARGET_PHASE" == 'REVIEW' || "$TARGET_PHASE" == 'TESTING' || "$TARGET_PHASE" == 'DEPLOYMENT_READINESS' || "$TARGET_PHASE" == 'DONE' ) ]] || return 0
     [[ -f "$REPO_ROOT/docs/specs/$FEATURE_ID/tasks.json" ]] || return 0
@@ -684,6 +807,7 @@ fi
 if [[ "$CURRENT_STATE" == 'TESTING' && ( "$TARGET_PHASE" == 'DEPLOYMENT_READINESS' || "$TARGET_PHASE" == 'DONE' ) ]]; then
     test_gate test PASS || ALL_PASSED=0
     test_configured_task_gates "$TARGET_PHASE" "$CURRENT_STATE" || ALL_PASSED=0
+    test_verification_gates || ALL_PASSED=0
 fi
 if [[ "$CURRENT_STATE" == 'DEPLOYMENT_READINESS' && "$TARGET_PHASE" == 'CODING' ]]; then
     test_gate deployment_readiness FAIL || ALL_PASSED=0

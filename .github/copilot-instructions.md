@@ -28,8 +28,7 @@ consumer project.
 - Validate a clean scaffold installation after changing template layout or
   installer behavior.
 - Keep PowerShell and Bash validators, task runners, security/release scripts,
-  and governance scripts behaviorally aligned; run `tests/phase0/`,
-  `tests/phase1/`, `tests/phase2/`, `tests/phase3/`, `tests/phase4/`,
-  `tests/phase5/`, `tests/phase6/`, and `tests/phase7/` harnesses after changes.
+  governance scripts, and verification adapters behaviorally aligned; run the
+  `tests/phase0/` through `tests/phase10/` harnesses after changes.
 - Do not reintroduce arbitrary shell command evaluation into the task registry
   or GitHub Actions workflows.

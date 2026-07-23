@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "commit_sha": "fixture-commit",
+  "tree_digest": "fixture-tree",
+  "tool": "fixture-mutator",
+  "tool_version": "1.0.0",
+  "mutants": [
+    {"id": "M1", "file": "src/app.py", "line": 2, "status": "killed"},
+    {"id": "M2", "file": "src/app.py", "line": 2, "status": "survived", "disposition": "owner: qa; rationale: add regression test; due: 2026-12-31"}
+  ]
+}

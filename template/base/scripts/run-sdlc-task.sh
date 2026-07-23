@@ -208,6 +208,63 @@ record_task_graph_evidence() {
     "$python_executable" "$task_graph" record-evidence --repo-root "$REPO_ROOT" --feature-id "$FEATURE_ID" --record-path "$record_path"
 }
 
+VERIFICATION_CONFIGURED=0
+grep -Eq '^verification:[[:space:]]*$' "$CONFIG_PATH" && VERIFICATION_CONFIGURED=1
+VERIFICATION_RISK_PROFILE="$(get_value quality_security.risk_profile low)"
+COVERAGE_ENABLED="$(get_value verification.coverage_enabled false)"
+COVERAGE_PROVIDER="$(get_value verification.coverage_provider coverage-py-json)"
+COVERAGE_REPORT_PATH="$(get_value verification.coverage_report_path)"
+COVERAGE_THRESHOLD="$(get_value verification.coverage_changed_line_threshold)"
+get_list verification.coverage_excluded_paths
+COVERAGE_EXCLUDED_PATHS=("${LIST_RESULT[@]}")
+get_list verification.coverage_required_risk_profiles
+COVERAGE_REQUIRED_RISK_PROFILES=("${LIST_RESULT[@]}")
+MUTATION_ENABLED="$(get_value verification.mutation_enabled false)"
+MUTATION_PROVIDER="$(get_value verification.mutation_provider generic-json)"
+MUTATION_REPORT_PATH="$(get_value verification.mutation_report_path)"
+MUTATION_THRESHOLD="$(get_value verification.mutation_threshold)"
+get_list verification.mutation_excluded_paths
+MUTATION_EXCLUDED_PATHS=("${LIST_RESULT[@]}")
+get_list verification.mutation_required_risk_profiles
+MUTATION_REQUIRED_RISK_PROFILES=("${LIST_RESULT[@]}")
+verification_required_for_profile() {
+    local enabled="$1" profile
+    shift
+    [[ "$enabled" == true ]] || return 1
+    for profile in "$@"; do [[ "$profile" == "$VERIFICATION_RISK_PROFILE" ]] && return 0; done
+    return 1
+}
+
+run_verification_adapter() {
+    local kind="$1" log_path="$2" provider report_path threshold output_path python_executable='' adapter="$SCRIPT_DIR/verification.py" adapter_exit
+    [[ -f "$adapter" ]] || { echo "[FAIL] Verification adapter not found: $adapter" | tee -a "$log_path"; return 2; }
+    for candidate in python3 python; do
+        if command -v "$candidate" >/dev/null 2>&1; then python_executable="$candidate"; break; fi
+    done
+    [[ -n "$python_executable" ]] || { echo '[FAIL] Python 3 is required for coverage or mutation verification.' | tee -a "$log_path"; return 2; }
+    if [[ "$kind" == coverage ]]; then
+        provider="$COVERAGE_PROVIDER"
+        report_path="$COVERAGE_REPORT_PATH"
+        threshold="$COVERAGE_THRESHOLD"
+        output_path="$EVIDENCE_DIRECTORY/coverage.json"
+        exclude_paths=("${COVERAGE_EXCLUDED_PATHS[@]}")
+    else
+        provider="$MUTATION_PROVIDER"
+        report_path="$MUTATION_REPORT_PATH"
+        threshold="$MUTATION_THRESHOLD"
+        output_path="$EVIDENCE_DIRECTORY/mutation.json"
+        exclude_paths=("${MUTATION_EXCLUDED_PATHS[@]}")
+    fi
+    adapter_args=("$adapter" "$kind" --repo-root "$REPO_ROOT" --report-path "$report_path" --provider "$provider" --threshold "$threshold" --commit-sha "$COMMIT_SHA" --tree-digest "$TREE_DIGEST" --output-path "$output_path")
+    for exclude in "${exclude_paths[@]}"; do adapter_args+=(--exclude "$exclude"); done
+    echo "[RUN] $kind adapter: $python_executable ${adapter_args[*]}"
+    set +e
+    (cd "$REPO_ROOT" && "$python_executable" "${adapter_args[@]}" 2>&1 | tee -a "$log_path")
+    adapter_exit=${PIPESTATUS[0]}
+    set -e
+    return "$adapter_exit"
+}
+
 VALIDATOR="$SCRIPT_DIR/validate-sdlc-config.sh"
 validator_args=(--config-path "$CONFIG_PATH" --repo-root "$REPO_ROOT")
 [[ -n "$EVIDENCE_DIRECTORY" ]] && validator_args+=(--evidence-directory "$EVIDENCE_DIRECTORY")
@@ -232,6 +289,10 @@ if [[ "$TASK" == 'all' ]]; then
     get_list validation.required_tasks; TASK_NAMES+=("${LIST_RESULT[@]}")
     get_list validation.optional_tasks; TASK_NAMES+=("${LIST_RESULT[@]}")
     get_list security.tasks; TASK_NAMES+=("${LIST_RESULT[@]}")
+    if (( VERIFICATION_CONFIGURED == 1 )); then
+        verification_required_for_profile "$COVERAGE_ENABLED" "${COVERAGE_REQUIRED_RISK_PROFILES[@]}" && TASK_NAMES+=(coverage)
+        verification_required_for_profile "$MUTATION_ENABLED" "${MUTATION_REQUIRED_RISK_PROFILES[@]}" && TASK_NAMES+=(mutation)
+    fi
 else
     TASK_NAMES=("$TASK")
 fi
@@ -248,17 +309,28 @@ for task_name in "${TASK_NAMES[@]}"; do
     command="$(command_display "$executable" "$task_name")"
     evidence_task_id="${TASK_ID:-$task_name}"
     log_path="$EVIDENCE_ROOT/$task_name.log"
-    record_path="$EVIDENCE_ROOT/$task_name.json"
+    record_name="$task_name.json"
+    [[ "$task_name" == coverage || "$task_name" == mutation ]] && record_name="$task_name-task.json"
+    record_path="$EVIDENCE_ROOT/$record_name"
     started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "[RUN] $task_name: $command"
     set +e
-    (cd "$REPO_ROOT" && "$executable" "${TASK_ARGUMENTS[@]}" 2>&1 | tee "$log_path")
+    (cd "$REPO_ROOT" && SDLC_COMMIT_SHA="$COMMIT_SHA" SDLC_TREE_DIGEST="$TREE_DIGEST" "$executable" "${TASK_ARGUMENTS[@]}" 2>&1 | tee "$log_path")
     exit_code=${PIPESTATUS[0]}
     set -e
     finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    if (( exit_code == 0 )); then result='PASS'; else result='FAIL'; fi
     relative_log="${log_path:${#REPO_ROOT}}"
     relative_log="${relative_log#/}"
+    gate_evidence_relative="$relative_log"
+    if [[ "$task_name" == coverage || "$task_name" == mutation ]]; then
+        set +e
+        run_verification_adapter "$task_name" "$log_path"
+        verification_exit=$?
+        set -e
+        (( exit_code == 0 )) && exit_code=$verification_exit
+        gate_evidence_relative="$EVIDENCE_DIRECTORY/$task_name.json"
+    fi
+    if (( exit_code == 0 )); then result='PASS'; else result='FAIL'; fi
     {
         printf '{"schema":1,"kind":"sdlc-task","task":'; json_escape "$evidence_task_id"; printf ',"verification_task":'; json_escape "$task_name"; printf ',"executable":'; json_escape "$executable"; printf ',"args":'; json_array "${TASK_ARGUMENTS[@]}"; printf ',"command":'; json_escape "$command"; printf ',"feature_id":'; json_escape "$FEATURE_ID"; printf ',"spec_path":'; json_escape "$SPEC_RELATIVE_PATH"; printf ',"commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"tree_digest":'; json_escape "$TREE_DIGEST"; printf ',"started_at":'; json_escape "$started_at"; printf ',"finished_at":'; json_escape "$finished_at"; printf ',"exit_code":%d,"result":"%s","evidence":' "$exit_code" "$result"; json_escape "$relative_log"; printf '}\n'
     } > "$record_path"
@@ -270,7 +342,7 @@ for task_name in "${TASK_NAMES[@]}"; do
         set_spec_field "gate_${task_name}_timestamp" "\"$finished_at\""
         set_spec_field "gate_${task_name}_exit_code" "$exit_code"
         set_spec_field "gate_${task_name}_result" "$result"
-        set_spec_field "gate_${task_name}_evidence" "\"$relative_log\""
+        set_spec_field "gate_${task_name}_evidence" "\"$gate_evidence_relative\""
         if [[ -n "$FEATURE_ID" ]]; then
             set_spec_field "gate_${task_name}_feature_id" "\"$FEATURE_ID\""
             set_spec_field "gate_${task_name}_spec_path" "\"$SPEC_RELATIVE_PATH\""

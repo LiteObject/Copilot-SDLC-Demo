@@ -12,5 +12,13 @@ applyTo: "tests/**"
 	behavior for each applicable requirement.
 - Map every acceptance criterion to an automated test or an owned manual
 	verification with evidence in **Acceptance Test Mapping**.
+- When `verification.coverage_enabled` is true, run the named `coverage` task
+	and inspect `.sdlc/evidence/coverage.json`; a pasted percentage is not
+	evidence. Coverage is changed-line evidence and never replaces the
+	configured behavioral, integration, accessibility, performance, or security
+	test layers.
+- When mutation verification is enabled, inspect `.sdlc/evidence/mutation.json`
+	for the tool version, score, survivors, exclusions, and disposition of every
+	surviving mutant.
 - Tests must be deterministic — no reliance on network, wall-clock time, or test order.
 - Never weaken or delete a test just to make the suite pass; fix the code instead.

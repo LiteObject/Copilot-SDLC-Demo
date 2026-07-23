@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "commit_sha": "stale-commit",
+  "tree_digest": "stale-tree",
+  "files": {
+    "src/app.py": {
+      "executed_lines": [2],
+      "missing_lines": [1]
+    }
+  }
+}

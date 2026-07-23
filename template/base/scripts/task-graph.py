@@ -481,6 +481,16 @@ def validate_graph(
                     errors.append(
                         f"task '{task_id}' uses unknown verification task '{verification_task}'"
                     )
+            verification_set = {
+                value for value in verification_tasks if isinstance(value, str)
+            }
+            if verification_set.intersection({"coverage", "mutation"}) and not (
+                verification_set.intersection({"test", "security_tests", "dast"})
+            ):
+                errors.append(
+                    f"task '{task_id}' cannot use coverage or mutation as its only verification; "
+                    "map the configured test task or a security test too"
+                )
         status = task.get("status")
         if status not in ALLOWED_STATUSES:
             errors.append(

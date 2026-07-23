@@ -20,7 +20,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('install', 'build', 'test', 'lint', 'type_check', 'sast', 'secrets', 'dependency_audit', 'license_audit', 'container_scan', 'iac_scan', 'dast', 'security_tests', 'package', 'sbom', 'sign', 'verify_signature', 'deploy', 'smoke_test', 'rollback', 'health_check', 'telemetry_check', 'failure_drill', 'post_release_check', 'agent_evaluation', 'ai_evaluation', 'ai_red_team', 'ai_production_exercise', 'ai_rollback', 'ai_decommission', 'measurement_baseline', 'measurement_snapshot', 'measurement_review', 'all')]
+    [ValidateSet('install', 'build', 'test', 'lint', 'type_check', 'sast', 'secrets', 'dependency_audit', 'license_audit', 'container_scan', 'iac_scan', 'dast', 'security_tests', 'coverage', 'mutation', 'package', 'sbom', 'sign', 'verify_signature', 'deploy', 'smoke_test', 'rollback', 'health_check', 'telemetry_check', 'failure_drill', 'post_release_check', 'agent_evaluation', 'ai_evaluation', 'ai_red_team', 'ai_production_exercise', 'ai_rollback', 'ai_decommission', 'measurement_baseline', 'measurement_snapshot', 'measurement_review', 'all')]
     [string] $Task = 'all',
     [string] $ConfigPath,
     [string] $RepoRoot,
@@ -176,25 +176,84 @@ function Sync-TaskGraphEvidence {
         throw "Could not record task evidence in $tasksPath."
     }
 }
+function Invoke-VerificationAdapter {
+    param(
+        [string] $Kind,
+        [string] $LogPath,
+        [string] $CommitSha,
+        [string] $TreeDigest
+    )
+    $adapterPath = Join-Path $PSScriptRoot 'verification.py'
+    if (-not (Test-Path -LiteralPath $adapterPath -PathType Leaf)) {
+        Add-Content -LiteralPath $LogPath -Value "[FAIL] Verification adapter not found: $adapterPath"
+        return 2
+    }
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($null -eq $python) { $python = Get-Command python3 -ErrorAction SilentlyContinue }
+    if ($null -eq $python) {
+        Add-Content -LiteralPath $LogPath -Value '[FAIL] Python 3 is required for coverage or mutation verification.'
+        return 2
+    }
+    if ($Kind -eq 'coverage') {
+        $provider = $coverageProvider
+        $reportPath = $coverageReportPath
+        $threshold = $coverageThreshold
+        $outputPath = "$EvidenceDirectory/coverage.json"
+        $excludedPaths = @($coverageExcludedPaths)
+    }
+    else {
+        $provider = $mutationProvider
+        $reportPath = $mutationReportPath
+        $threshold = $mutationThreshold
+        $outputPath = "$EvidenceDirectory/mutation.json"
+        $excludedPaths = @($mutationExcludedPaths)
+    }
+    $adapterArguments = @($adapterPath, $Kind, '--repo-root', $RepoRoot, '--report-path', $reportPath, '--provider', $provider, '--threshold', $threshold, '--commit-sha', $CommitSha, '--tree-digest', $TreeDigest, '--output-path', $outputPath)
+    foreach ($excludedPath in $excludedPaths) { $adapterArguments += @('--exclude', $excludedPath) }
+    Write-Host "[RUN] ${Kind} adapter: $($python.Source) $($adapterArguments -join ' ')"
+    Push-Location $RepoRoot
+    try {
+        $adapterOutput = & $python.Source @adapterArguments 2>&1
+        $adapterExitCode = $LASTEXITCODE
+        $adapterOutput | Tee-Object -FilePath $LogPath -Append | Out-Host
+    }
+    finally { Pop-Location }
+    return $adapterExitCode
+}
 function Invoke-Task {
     param([string] $TaskName, [string] $EvidenceTaskId, [hashtable] $TaskConfig, [string] $EvidenceRoot, [string] $CommitSha, [string] $TreeDigest)
     $executable = [string]$TaskConfig.executable
     $arguments = @($TaskConfig.args)
     $command = Get-CommandDisplay -Executable $executable -Arguments $arguments
     $logPath = Join-Path $EvidenceRoot "$TaskName.log"
-    $recordPath = Join-Path $EvidenceRoot "$TaskName.json"
+    $recordName = if ($TaskName -in @('coverage', 'mutation')) { "$TaskName-task.json" } else { "$TaskName.json" }
+    $recordPath = Join-Path $EvidenceRoot $recordName
     New-Item -ItemType File -Path $logPath -Force | Out-Null
     $started = [DateTime]::UtcNow
     Write-Host "[RUN] ${TaskName}: $command"
     Push-Location $RepoRoot
+    $previousCommitEnvironment = $env:SDLC_COMMIT_SHA
+    $previousTreeEnvironment = $env:SDLC_TREE_DIGEST
     try {
+        $env:SDLC_COMMIT_SHA = $CommitSha
+        $env:SDLC_TREE_DIGEST = $TreeDigest
         & $executable @arguments 2>&1 | Tee-Object -FilePath $logPath | Out-Host
         $exitCode = $LASTEXITCODE
     }
-    finally { Pop-Location }
+    finally {
+        if ($null -eq $previousCommitEnvironment) { Remove-Item Env:SDLC_COMMIT_SHA -ErrorAction SilentlyContinue } else { $env:SDLC_COMMIT_SHA = $previousCommitEnvironment }
+        if ($null -eq $previousTreeEnvironment) { Remove-Item Env:SDLC_TREE_DIGEST -ErrorAction SilentlyContinue } else { $env:SDLC_TREE_DIGEST = $previousTreeEnvironment }
+        Pop-Location
+    }
     $finished = [DateTime]::UtcNow
-    $result = if ($exitCode -eq 0) { 'PASS' } else { 'FAIL' }
     $relativeLog = $logPath.Substring(((Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar).Length) -replace '\\', '/'
+    $gateEvidence = $relativeLog
+    if ($TaskName -in @('coverage', 'mutation')) {
+        $verificationExitCode = Invoke-VerificationAdapter -Kind $TaskName -LogPath $logPath -CommitSha $CommitSha -TreeDigest $TreeDigest
+        if ($exitCode -eq 0) { $exitCode = $verificationExitCode }
+        $gateEvidence = "$EvidenceDirectory/$TaskName.json"
+    }
+    $result = if ($exitCode -eq 0) { 'PASS' } else { 'FAIL' }
     $record = [ordered]@{ schema = 1; kind = 'sdlc-task'; task = $EvidenceTaskId; verification_task = $TaskName; executable = $executable; args = @($arguments); command = $command; feature_id = $script:FeatureId; spec_path = $script:SpecRelativePath; commit_sha = $CommitSha; tree_digest = $TreeDigest; started_at = $started.ToString('yyyy-MM-ddTHH:mm:ssZ'); finished_at = $finished.ToString('yyyy-MM-ddTHH:mm:ssZ'); exit_code = $exitCode; result = $result; evidence = $relativeLog }
     $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $recordPath -Encoding utf8
     Sync-TaskGraphEvidence -RecordPath $recordPath
@@ -206,7 +265,7 @@ function Invoke-Task {
             ("gate_${TaskName}_timestamp") = $finished.ToString('yyyy-MM-ddTHH:mm:ssZ')
             ("gate_${TaskName}_exit_code") = [string]$exitCode
             ("gate_${TaskName}_result") = $result
-            ("gate_${TaskName}_evidence") = $relativeLog
+            ("gate_${TaskName}_evidence") = $gateEvidence
         }
         if ($script:FeatureId) {
             $updates[("gate_${TaskName}_feature_id")] = $script:FeatureId
@@ -227,6 +286,20 @@ if ($RecordSpec) { $validatorArguments += @('-SpecPath', $SpecPath, '-RecordSpec
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $config = Read-Config -Content ([System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $ConfigPath).Path))
+$verificationConfigured = (Get-Content -LiteralPath $ConfigPath -Raw) -match '(?m)^verification:\s*$'
+$verificationRiskProfile = Get-ConfigValue $config 'quality_security.risk_profile' 'low'
+$coverageEnabled = Get-ConfigValue $config 'verification.coverage_enabled' 'false'
+$coverageProvider = Get-ConfigValue $config 'verification.coverage_provider' 'coverage-py-json'
+$coverageReportPath = Get-ConfigValue $config 'verification.coverage_report_path'
+$coverageThreshold = Get-ConfigValue $config 'verification.coverage_changed_line_threshold'
+$coverageExcludedPaths = @(Get-ConfigList $config 'verification.coverage_excluded_paths')
+$coverageRequiredRiskProfiles = @(Get-ConfigList $config 'verification.coverage_required_risk_profiles')
+$mutationEnabled = Get-ConfigValue $config 'verification.mutation_enabled' 'false'
+$mutationProvider = Get-ConfigValue $config 'verification.mutation_provider' 'generic-json'
+$mutationReportPath = Get-ConfigValue $config 'verification.mutation_report_path'
+$mutationThreshold = Get-ConfigValue $config 'verification.mutation_threshold'
+$mutationExcludedPaths = @(Get-ConfigList $config 'verification.mutation_excluded_paths')
+$mutationRequiredRiskProfiles = @(Get-ConfigList $config 'verification.mutation_required_risk_profiles')
 if (-not $EvidenceDirectory) { $EvidenceDirectory = Get-ConfigValue $config 'validation.evidence_directory' '.sdlc/evidence' }
 $evidenceRoot = Join-Path $RepoRoot $EvidenceDirectory
 New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
@@ -241,6 +314,10 @@ if ($Task -eq 'all') {
     $taskNames += @(Get-ConfigList $config 'security.tasks')
 }
 else { $taskNames = @($Task) }
+if ($Task -eq 'all' -and $verificationConfigured) {
+    if ($coverageEnabled -eq 'true' -and $coverageRequiredRiskProfiles -contains $verificationRiskProfile) { $taskNames += 'coverage' }
+    if ($mutationEnabled -eq 'true' -and $mutationRequiredRiskProfiles -contains $verificationRiskProfile) { $taskNames += 'mutation' }
+}
 $seen = @{}
 foreach ($taskName in $taskNames) {
     if ($seen.ContainsKey($taskName)) { continue }

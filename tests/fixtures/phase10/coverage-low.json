@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "commit_sha": "fixture-commit",
+  "tree_digest": "fixture-tree",
+  "files": {
+    "src/app.py": {
+      "executed_lines": [1],
+      "missing_lines": [2]
+    }
+  }
+}

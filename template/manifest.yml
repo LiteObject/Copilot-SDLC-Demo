@@ -20,6 +20,7 @@ base:
     - scripts/feature-context.ps1
     - scripts/feature-context.sh
     - scripts/task-graph.py
+    - scripts/verification.py
     - scripts/migrate-spec.ps1
     - scripts/migrate-spec.sh
     - scripts/validate-sdlc-config.ps1
@@ -79,6 +80,7 @@ ownership:
     - scripts/feature-context.ps1
     - scripts/feature-context.sh
     - scripts/task-graph.py
+    - scripts/verification.py
   project_owned:
     - .github/sdlc-config.yml
     - docs/spec.md

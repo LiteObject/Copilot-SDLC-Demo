@@ -59,6 +59,26 @@ security:
   tasks: []
   blocking_severities: [critical, high]
 
+# ── Meaningful Verification ────────────────────────
+# Coverage and mutation checks are risk-based. Enable a check and configure its
+# named task when the selected risk profile requires it. Reports must include
+# commit_sha and tree_digest metadata for the source revision they measure.
+verification:
+  coverage_enabled: false
+  coverage_task: coverage
+  coverage_provider: coverage-py-json
+  coverage_report_path: .sdlc/reports/coverage.json
+  coverage_changed_line_threshold: 80
+  coverage_excluded_paths: [tests/**, generated/**]
+  coverage_required_risk_profiles: [medium, high, critical]
+  mutation_enabled: false
+  mutation_task: mutation
+  mutation_provider: generic-json
+  mutation_report_path: .sdlc/reports/mutation.json
+  mutation_threshold: 80
+  mutation_excluded_paths: []
+  mutation_required_risk_profiles: []
+
 # ── Release Assurance ──────────────────────────────
 # Opt-in for repositories that produce deployable artifacts.
 release_assurance:
@@ -276,6 +296,16 @@ tasks:
 #  measurement_review:
 #    executable: python
 #    args: [scripts/measurement-review.py]
+
+# Configure these tasks when verification.coverage_enabled or
+# verification.mutation_enabled is true. The runner invokes the configured
+# task first, then validates its revision-bound JSON report.
+#  coverage:
+#    executable: python
+#    args: [scripts/run-coverage.py]
+#  mutation:
+#    executable: python
+#    args: [scripts/run-mutation.py]
 
 # Security task examples. Add the selected IDs to security.tasks and configure
 # each executable/args record. Reports should emit severity-bearing lines or

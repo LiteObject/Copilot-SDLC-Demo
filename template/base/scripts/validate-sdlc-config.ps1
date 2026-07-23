@@ -293,9 +293,10 @@ catch {
 $errors = New-Object System.Collections.Generic.List[string]
 $warnings = New-Object System.Collections.Generic.List[string]
 $allowedPackageManagers = @('npm', 'yarn', 'pnpm', 'pip', 'poetry', 'cargo', 'dotnet', 'go', 'none')
-$allowedTasks = @('install', 'build', 'test', 'lint', 'type_check', 'sast', 'secrets', 'dependency_audit', 'license_audit', 'container_scan', 'iac_scan', 'dast', 'security_tests', 'package', 'sbom', 'sign', 'verify_signature', 'deploy', 'smoke_test', 'rollback', 'health_check', 'telemetry_check', 'failure_drill', 'post_release_check', 'agent_evaluation', 'ai_evaluation', 'ai_red_team', 'ai_production_exercise', 'ai_rollback', 'ai_decommission', 'measurement_baseline', 'measurement_snapshot', 'measurement_review')
+$allowedTasks = @('install', 'build', 'test', 'lint', 'type_check', 'sast', 'secrets', 'dependency_audit', 'license_audit', 'container_scan', 'iac_scan', 'dast', 'security_tests', 'coverage', 'mutation', 'package', 'sbom', 'sign', 'verify_signature', 'deploy', 'smoke_test', 'rollback', 'health_check', 'telemetry_check', 'failure_drill', 'post_release_check', 'agent_evaluation', 'ai_evaluation', 'ai_red_team', 'ai_production_exercise', 'ai_rollback', 'ai_decommission', 'measurement_baseline', 'measurement_snapshot', 'measurement_review')
 $allowedTestLayers = @('unit', 'integration', 'contract', 'api', 'e2e', 'accessibility', 'performance', 'resilience', 'fuzz', 'property')
 $allowedSeverities = @('critical', 'high', 'medium', 'low', 'info')
+$allowedVerificationProviders = @('coverage-py-json', 'generic-json')
 
 if ((Get-ConfigValue $config 'sdlc_config_schema') -ne '1') {
     Add-ValidationError $errors "sdlc_config_schema must be 1."
@@ -351,11 +352,11 @@ foreach ($layer in $testLayers) { if ($layer -notin $allowedTestLayers) { Add-Va
 $mappingRequired = Get-ConfigValue $config 'quality_security.acceptance_mapping_required'
 if ($mappingRequired -notin @('true', 'false')) { Add-ValidationError $errors 'quality_security.acceptance_mapping_required must be true or false.' }
 $securityReviewRequired = Get-ConfigValue $config 'security.review_required'
+$securityTasks = @(Get-ConfigList $config 'security.tasks' | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 $aiGovernanceEnabled = Get-ConfigValue $config 'ai_governance.enabled' 'false'
 $aiLifecycleEnabled = Get-ConfigValue $config 'ai_lifecycle.enabled' 'false'
 $measurementEnabled = Get-ConfigValue $config 'measurement.enabled' 'false'
 if ($securityReviewRequired -notin @('true', 'false')) { Add-ValidationError $errors 'security.review_required must be true or false.' }
-$securityTasks = @(Get-ConfigList $config 'security.tasks' | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 $blockingSeverities = @(Get-ConfigList $config 'security.blocking_severities' | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 if ($blockingSeverities.Count -eq 0) { Add-ValidationError $errors 'security.blocking_severities must contain at least one severity.' }
 foreach ($severity in $blockingSeverities) { if ($severity -notin $allowedSeverities) { Add-ValidationError $errors "Unsupported blocking severity '$severity'." } }
@@ -364,8 +365,59 @@ foreach ($securityTask in $securityTasks) {
 }
 if ($securityReviewRequired -eq 'true' -and $securityTasks.Count -eq 0) { [void]$warnings.Add('security.review_required is true but security.tasks is empty; configure at least one scanner or security test task.') }
 
+$verificationConfigured = $content -match '(?m)^verification:\s*$'
+$coverageEnabled = Get-ConfigValue $config 'verification.coverage_enabled'
+$coverageTask = Get-ConfigValue $config 'verification.coverage_task' 'coverage'
+$coverageProvider = Get-ConfigValue $config 'verification.coverage_provider'
+$coverageReportPath = Get-ConfigValue $config 'verification.coverage_report_path'
+$coverageThreshold = Get-ConfigValue $config 'verification.coverage_changed_line_threshold'
+$coverageExcludedPaths = @(Get-ConfigList $config 'verification.coverage_excluded_paths')
+$coverageRequiredRiskProfiles = @(Get-ConfigList $config 'verification.coverage_required_risk_profiles')
+$mutationEnabled = Get-ConfigValue $config 'verification.mutation_enabled'
+$mutationTask = Get-ConfigValue $config 'verification.mutation_task' 'mutation'
+$mutationProvider = Get-ConfigValue $config 'verification.mutation_provider'
+$mutationReportPath = Get-ConfigValue $config 'verification.mutation_report_path'
+$mutationThreshold = Get-ConfigValue $config 'verification.mutation_threshold'
+$mutationExcludedPaths = @(Get-ConfigList $config 'verification.mutation_excluded_paths')
+$mutationRequiredRiskProfiles = @(Get-ConfigList $config 'verification.mutation_required_risk_profiles')
+if ($verificationConfigured) {
+    if ($coverageEnabled -notin @('true', 'false')) { Add-ValidationError $errors 'verification.coverage_enabled must be true or false.' }
+    if ($mutationEnabled -notin @('true', 'false')) { Add-ValidationError $errors 'verification.mutation_enabled must be true or false.' }
+    foreach ($profile in @($coverageRequiredRiskProfiles + $mutationRequiredRiskProfiles)) {
+        if ($profile -notin @('low', 'medium', 'high', 'critical')) { Add-ValidationError $errors "Verification required risk profile '$profile' is unsupported." }
+    }
+    foreach ($path in @($coverageExcludedPaths + $mutationExcludedPaths)) {
+        if ($path -and -not (Test-SafeRelativePath $path)) { Add-ValidationError $errors "Verification excluded path must be repository-relative: $path" }
+    }
+    function Test-VerificationThreshold {
+        param([string] $Name, [string] $Value)
+        $number = 0.0
+        if (-not [double]::TryParse($Value, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$number) -or $number -lt 0 -or $number -gt 100) {
+            Add-ValidationError $errors "$Name must be a number from 0 through 100."
+        }
+    }
+    if ($coverageEnabled -eq 'true') {
+        if ($coverageTask -ne 'coverage') { Add-ValidationError $errors 'verification.coverage_task must be coverage.' }
+        if ($coverageProvider -notin $allowedVerificationProviders) { Add-ValidationError $errors "Unsupported coverage provider '$coverageProvider'." }
+        if (-not $coverageReportPath -or -not (Test-SafeRelativePath $coverageReportPath)) { Add-ValidationError $errors 'verification.coverage_report_path must be a safe repository-relative path.' }
+        Test-VerificationThreshold 'verification.coverage_changed_line_threshold' $coverageThreshold
+        if ($coverageRequiredRiskProfiles.Count -eq 0) { Add-ValidationError $errors 'Enabled coverage requires at least one coverage_required_risk_profiles entry.' }
+    }
+    if ($mutationEnabled -eq 'true') {
+        if ($mutationTask -ne 'mutation') { Add-ValidationError $errors 'verification.mutation_task must be mutation.' }
+        if ($mutationProvider -ne 'generic-json') { Add-ValidationError $errors "Unsupported mutation provider '$mutationProvider'." }
+        if (-not $mutationReportPath -or -not (Test-SafeRelativePath $mutationReportPath)) { Add-ValidationError $errors 'verification.mutation_report_path must be a safe repository-relative path.' }
+        Test-VerificationThreshold 'verification.mutation_threshold' $mutationThreshold
+        if ($mutationRequiredRiskProfiles.Count -eq 0) { Add-ValidationError $errors 'Enabled mutation requires at least one mutation_required_risk_profiles entry.' }
+    }
+    if ($coverageRequiredRiskProfiles -contains $riskProfile -and $coverageEnabled -ne 'true') { Add-ValidationError $errors "Risk profile '$riskProfile' requires verification coverage to be enabled." }
+    if ($mutationRequiredRiskProfiles -contains $riskProfile -and $mutationEnabled -ne 'true') { Add-ValidationError $errors "Risk profile '$riskProfile' requires mutation verification to be enabled." }
+}
+
 $allConfiguredTasks = @($requiredTasks + $optionalTasks + $securityTasks)
 if ($installTask -ne 'none') { $allConfiguredTasks += $installTask }
+if ($verificationConfigured -and $coverageEnabled -eq 'true') { $allConfiguredTasks += 'coverage' }
+if ($verificationConfigured -and $mutationEnabled -eq 'true') { $allConfiguredTasks += 'mutation' }
 $taskNames = @($config.Tasks.Keys)
 foreach ($taskName in $taskNames) {
     if ($taskName -notin $allowedTasks) { Add-ValidationError $errors "Unknown task registry entry '$taskName'." }

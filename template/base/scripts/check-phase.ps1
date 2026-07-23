@@ -360,6 +360,130 @@ function Test-ConfiguredTaskGates {
     return $passed
 }
 
+function Get-ConfigSectionValue {
+    param([string] $Root, [string] $Section, [string] $Key)
+    $configPath = Join-Path $Root '.github/sdlc-config.yml'
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return '' }
+    $inside = $false
+    foreach ($rawLine in (Get-Content -LiteralPath $configPath)) {
+        $line = [string]$rawLine
+        if ($line -match ('^' + [regex]::Escape($Section) + ':\s*$')) { $inside = $true; continue }
+        if ($inside -and $line -match '^[^\s#]') { break }
+        if ($inside -and $line -match ('^\s+' + [regex]::Escape($Key) + ':\s*(?<value>.*)$')) {
+            $value = $Matches.value -replace '\s+#.*$', ''
+            return $value.Trim().Trim('"', "'")
+        }
+    }
+    return ''
+}
+
+function Get-ConfigSectionList {
+    param([string] $Root, [string] $Section, [string] $Key)
+    $configPath = Join-Path $Root '.github/sdlc-config.yml'
+    $items = New-Object System.Collections.Generic.List[string]
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return @() }
+    $inside = $false
+    $active = $false
+    foreach ($rawLine in (Get-Content -LiteralPath $configPath)) {
+        $line = [string]$rawLine
+        if ($line -match ('^' + [regex]::Escape($Section) + ':\s*$')) { $inside = $true; continue }
+        if ($inside -and $line -match '^[^\s#]') { break }
+        if ($inside -and $line -match ('^\s+' + [regex]::Escape($Key) + ':\s*(?<value>.*)$')) {
+            $value = ($Matches.value -replace '\s+#.*$', '').Trim()
+            if ($value.StartsWith('[') -and $value.EndsWith(']')) {
+                $inner = $value.Substring(1, $value.Length - 2)
+                foreach ($item in ($inner -split ',')) {
+                    $clean = $item.Trim().Trim('"', "'")
+                    if ($clean) { [void]$items.Add($clean) }
+                }
+                $active = $false
+            }
+            else { $active = $true }
+            continue
+        }
+        if ($inside -and $active -and $line -match '^\s+-\s*(?<item>.*)$') {
+            $clean = ($Matches.item -replace '\s+#.*$', '').Trim().Trim('"', "'")
+            if ($clean) { [void]$items.Add($clean) }
+            continue
+        }
+        if ($active -and $line -notmatch '^\s*$') { $active = $false }
+    }
+    return @($items)
+}
+
+function Get-VerificationContract {
+    param([string] $Root)
+    $configPath = Join-Path $Root '.github/sdlc-config.yml'
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return $null }
+    $content = Get-Content -LiteralPath $configPath -Raw
+    if ($content -notmatch '(?m)^verification:\s*$') { return $null }
+    return [pscustomobject]@{
+        RiskProfile = Get-ConfigSectionValue -Root $Root -Section 'quality_security' -Key 'risk_profile'
+        CoverageEnabled = Get-ConfigSectionValue -Root $Root -Section 'verification' -Key 'coverage_enabled'
+        CoverageProfiles = @(Get-ConfigSectionList -Root $Root -Section 'verification' -Key 'coverage_required_risk_profiles')
+        MutationEnabled = Get-ConfigSectionValue -Root $Root -Section 'verification' -Key 'mutation_enabled'
+        MutationProfiles = @(Get-ConfigSectionList -Root $Root -Section 'verification' -Key 'mutation_required_risk_profiles')
+    }
+}
+
+function Test-VerificationRecord {
+    param(
+        [string] $Root,
+        [string] $Kind,
+        [hashtable] $Metadata,
+        [string] $ExpectedCommitSha,
+        [string] $ExpectedTreeDigest
+    )
+    $adapterPath = Join-Path $PSScriptRoot 'verification.py'
+    if (-not (Test-Path -LiteralPath $adapterPath -PathType Leaf)) {
+        Write-Host '[FAIL] Verification adapter not found.'
+        return $false
+    }
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($null -eq $python) { $python = Get-Command python3 -ErrorAction SilentlyContinue }
+    if ($null -eq $python) {
+        Write-Host '[FAIL] Python 3 is required for verification evidence validation.'
+        return $false
+    }
+    $evidence = Get-MetadataValue $Metadata "gate_${Kind}_evidence"
+    $output = & $python.Source $adapterPath validate-record --record-kind $Kind --record-path $evidence --repo-root $Root --commit-sha $ExpectedCommitSha --tree-digest $ExpectedTreeDigest 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[FAIL] Verification '$Kind' evidence is invalid: $($output -join ' ')"
+        return $false
+    }
+    Write-Host "[PASS] Verification '$Kind' evidence matches the current report and revision."
+    return $true
+}
+
+function Test-VerificationGates {
+    param(
+        [string] $Root,
+        [hashtable] $Metadata,
+        [string] $ExpectedCommitSha,
+        [string] $ExpectedTreeDigest
+    )
+    $contract = Get-VerificationContract -Root $Root
+    if ($null -eq $contract) { return $true }
+    $passed = $true
+    if ($contract.CoverageProfiles -contains $contract.RiskProfile) {
+        if ($contract.CoverageEnabled -ne 'true') {
+            Write-Host "[FAIL] Risk profile '$($contract.RiskProfile)' requires verification coverage to be enabled."
+            $passed = $false
+        }
+        elseif (-not (Test-GateRecord -Name 'coverage' -AllowedResults @('PASS') -Metadata $Metadata -ExpectedCommitSha $ExpectedCommitSha -ExpectedTreeDigest $ExpectedTreeDigest -Root $Root)) { $passed = $false }
+        elseif (-not (Test-VerificationRecord -Root $Root -Kind 'coverage' -Metadata $Metadata -ExpectedCommitSha $ExpectedCommitSha -ExpectedTreeDigest $ExpectedTreeDigest)) { $passed = $false }
+    }
+    if ($contract.MutationProfiles -contains $contract.RiskProfile) {
+        if ($contract.MutationEnabled -ne 'true') {
+            Write-Host "[FAIL] Risk profile '$($contract.RiskProfile)' requires mutation verification to be enabled."
+            $passed = $false
+        }
+        elseif (-not (Test-GateRecord -Name 'mutation' -AllowedResults @('PASS') -Metadata $Metadata -ExpectedCommitSha $ExpectedCommitSha -ExpectedTreeDigest $ExpectedTreeDigest -Root $Root)) { $passed = $false }
+        elseif (-not (Test-VerificationRecord -Root $Root -Kind 'mutation' -Metadata $Metadata -ExpectedCommitSha $ExpectedCommitSha -ExpectedTreeDigest $ExpectedTreeDigest)) { $passed = $false }
+    }
+    return $passed
+}
+
 function Test-TaskGraphGate {
     param(
         [string] $Root,
@@ -738,6 +862,7 @@ if ($currentState -eq 'TESTING' -and $targetPhase -eq 'CODING') {
 if ($currentState -eq 'TESTING' -and $targetPhase -in @('DEPLOYMENT_READINESS', 'DONE')) {
     if (-not (Test-GateRecord -Name 'test' -AllowedResults @('PASS') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }
     if (-not (Test-ConfiguredTaskGates -Root $RepoRoot -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -TargetPhase $targetPhase -CurrentState $currentState)) { $allPassed = $false }
+    if (-not (Test-VerificationGates -Root $RepoRoot -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest)) { $allPassed = $false }
 }
 if ($currentState -eq 'DEPLOYMENT_READINESS' -and $targetPhase -eq 'CODING') {
     if (-not (Test-GateRecord -Name 'deployment_readiness' -AllowedResults @('FAIL') -Metadata $metadata.Values -ExpectedCommitSha $expectedCommitSha -ExpectedTreeDigest $expectedTreeDigest -Root $RepoRoot)) { $allPassed = $false }

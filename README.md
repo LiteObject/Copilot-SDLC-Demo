@@ -114,6 +114,9 @@ Copilot-SDLC-Demo/
 ├─ tests/phase5/                    <- AI governance harnesses
 ├─ tests/phase6/                    <- AI product lifecycle harnesses
 ├─ tests/phase7/                    <- measurement and continuous-improvement harnesses
+├─ tests/phase8/                    <- feature-scoped workflow harnesses
+├─ tests/phase9/                    <- task graph and task-level evidence harnesses
+├─ tests/phase10/                   <- meaningful verification gate harnesses
 ├─ .github/copilot-instructions.md  <- authoring-repository rules
 ├─ README.md                        <- this file
 └─ LICENSE

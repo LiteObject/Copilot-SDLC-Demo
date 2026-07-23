@@ -232,9 +232,10 @@ command_display() {
 PACKAGE_MANAGER="$(get_value stack.package_manager)"
 MANIFEST="$(get_value stack.package_manifest)"
 ALLOWED_PACKAGE_MANAGERS=(npm yarn pnpm pip poetry cargo dotnet go none)
-ALLOWED_TASKS=(install build test lint type_check sast secrets dependency_audit license_audit container_scan iac_scan dast security_tests package sbom sign verify_signature deploy smoke_test rollback health_check telemetry_check failure_drill post_release_check agent_evaluation ai_evaluation ai_red_team ai_production_exercise ai_rollback ai_decommission measurement_baseline measurement_snapshot measurement_review)
+ALLOWED_TASKS=(install build test lint type_check sast secrets dependency_audit license_audit container_scan iac_scan dast security_tests coverage mutation package sbom sign verify_signature deploy smoke_test rollback health_check telemetry_check failure_drill post_release_check agent_evaluation ai_evaluation ai_red_team ai_production_exercise ai_rollback ai_decommission measurement_baseline measurement_snapshot measurement_review)
 ALLOWED_TEST_LAYERS=(unit integration contract api e2e accessibility performance resilience fuzz property)
 ALLOWED_SEVERITIES=(critical high medium low info)
+ALLOWED_VERIFICATION_PROVIDERS=(coverage-py-json generic-json)
 
 if [[ "$(get_value sdlc_config_schema)" != '1' ]]; then
     add_error 'sdlc_config_schema must be 1.'
@@ -337,8 +338,82 @@ if [[ "$SECURITY_REVIEW_REQUIRED" == true && ${#SECURITY_TASKS[@]} -eq 0 ]]; the
     WARNINGS+=('security.review_required is true but security.tasks is empty; configure at least one scanner or security test task.')
 fi
 
+VERIFICATION_CONFIGURED=0
+grep -Eq '^verification:[[:space:]]*$' "$CONFIG_PATH" && VERIFICATION_CONFIGURED=1
+COVERAGE_ENABLED="$(get_value verification.coverage_enabled)"
+COVERAGE_TASK="$(get_value verification.coverage_task coverage)"
+COVERAGE_PROVIDER="$(get_value verification.coverage_provider)"
+COVERAGE_REPORT_PATH="$(get_value verification.coverage_report_path)"
+COVERAGE_THRESHOLD="$(get_value verification.coverage_changed_line_threshold)"
+get_list verification.coverage_excluded_paths
+COVERAGE_EXCLUDED_PATHS=("${LIST_RESULT[@]}")
+get_list verification.coverage_required_risk_profiles
+COVERAGE_REQUIRED_RISK_PROFILES=("${LIST_RESULT[@]}")
+MUTATION_ENABLED="$(get_value verification.mutation_enabled)"
+MUTATION_TASK="$(get_value verification.mutation_task mutation)"
+MUTATION_PROVIDER="$(get_value verification.mutation_provider)"
+MUTATION_REPORT_PATH="$(get_value verification.mutation_report_path)"
+MUTATION_THRESHOLD="$(get_value verification.mutation_threshold)"
+get_list verification.mutation_excluded_paths
+MUTATION_EXCLUDED_PATHS=("${LIST_RESULT[@]}")
+get_list verification.mutation_required_risk_profiles
+MUTATION_REQUIRED_RISK_PROFILES=("${LIST_RESULT[@]}")
+
+is_allowed_verification_provider() {
+    local candidate="$1" allowed
+    for allowed in "${ALLOWED_VERIFICATION_PROVIDERS[@]}"; do
+        [[ "$candidate" == "$allowed" ]] && return 0
+    done
+    return 1
+}
+is_valid_threshold() {
+    local candidate="$1"
+    [[ "$candidate" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
+    awk -v value="$candidate" 'BEGIN { exit !(value >= 0 && value <= 100) }'
+}
+if (( VERIFICATION_CONFIGURED == 1 )); then
+    for profile in "${COVERAGE_REQUIRED_RISK_PROFILES[@]}" "${MUTATION_REQUIRED_RISK_PROFILES[@]}"; do
+        case "$profile" in low|medium|high|critical) ;; '') ;; *) add_error "Verification required risk profile '$profile' is unsupported." ;; esac
+    done
+    for path in "${COVERAGE_EXCLUDED_PATHS[@]}" "${MUTATION_EXCLUDED_PATHS[@]}"; do
+        if [[ -n "$path" ]] && ! safe_relative_path "$path"; then
+            add_error "Verification excluded path must be repository-relative: $path"
+        fi
+    done
+    [[ "$COVERAGE_ENABLED" == true || "$COVERAGE_ENABLED" == false ]] || add_error 'verification.coverage_enabled must be true or false.'
+    [[ "$MUTATION_ENABLED" == true || "$MUTATION_ENABLED" == false ]] || add_error 'verification.mutation_enabled must be true or false.'
+    if [[ "$COVERAGE_ENABLED" == true ]]; then
+        [[ "$COVERAGE_TASK" == coverage ]] || add_error 'verification.coverage_task must be coverage.'
+        is_allowed_verification_provider "$COVERAGE_PROVIDER" || add_error "Unsupported coverage provider '$COVERAGE_PROVIDER'."
+        [[ -n "$COVERAGE_REPORT_PATH" ]] && safe_relative_path "$COVERAGE_REPORT_PATH" || add_error 'verification.coverage_report_path must be a safe repository-relative path.'
+        is_valid_threshold "$COVERAGE_THRESHOLD" || add_error 'verification.coverage_changed_line_threshold must be a number from 0 through 100.'
+        (( ${#COVERAGE_REQUIRED_RISK_PROFILES[@]} > 0 )) || add_error 'Enabled coverage requires at least one coverage_required_risk_profiles entry.'
+    fi
+    if [[ "$MUTATION_ENABLED" == true ]]; then
+        [[ "$MUTATION_TASK" == mutation ]] || add_error 'verification.mutation_task must be mutation.'
+        [[ "$MUTATION_PROVIDER" == generic-json ]] || add_error "Unsupported mutation provider '$MUTATION_PROVIDER'."
+        [[ -n "$MUTATION_REPORT_PATH" ]] && safe_relative_path "$MUTATION_REPORT_PATH" || add_error 'verification.mutation_report_path must be a safe repository-relative path.'
+        is_valid_threshold "$MUTATION_THRESHOLD" || add_error 'verification.mutation_threshold must be a number from 0 through 100.'
+        (( ${#MUTATION_REQUIRED_RISK_PROFILES[@]} > 0 )) || add_error 'Enabled mutation requires at least one mutation_required_risk_profiles entry.'
+    fi
+    coverage_required=0
+    for profile in "${COVERAGE_REQUIRED_RISK_PROFILES[@]}"; do [[ "$profile" == "$RISK_PROFILE" ]] && coverage_required=1; done
+    mutation_required=0
+    for profile in "${MUTATION_REQUIRED_RISK_PROFILES[@]}"; do [[ "$profile" == "$RISK_PROFILE" ]] && mutation_required=1; done
+    if (( coverage_required == 1 )) && [[ "$COVERAGE_ENABLED" != true ]]; then
+        add_error "Risk profile '$RISK_PROFILE' requires verification coverage to be enabled."
+    fi
+    if (( mutation_required == 1 )) && [[ "$MUTATION_ENABLED" != true ]]; then
+        add_error "Risk profile '$RISK_PROFILE' requires mutation verification to be enabled."
+    fi
+fi
+
 TASKS_TO_CHECK=("${REQUIRED_TASKS[@]}" "${OPTIONAL_TASKS[@]}" "${SECURITY_TASKS[@]}")
 [[ "$INSTALL_TASK" == 'none' ]] || TASKS_TO_CHECK+=("$INSTALL_TASK")
+if (( VERIFICATION_CONFIGURED == 1 )); then
+    [[ "$COVERAGE_ENABLED" == true ]] && TASKS_TO_CHECK+=(coverage)
+    [[ "$MUTATION_ENABLED" == true ]] && TASKS_TO_CHECK+=(mutation)
+fi
 for task in "${!TASK_EXEC[@]}"; do
     valid=0
     for allowed in "${ALLOWED_TASKS[@]}"; do [[ "$task" == "$allowed" ]] && valid=1; done

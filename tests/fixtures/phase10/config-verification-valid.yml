@@ -1,0 +1,50 @@
+sdlc_config_schema: 1
+stack:
+  languages: [python]
+  frameworks: []
+  package_manager: none
+  package_manifest: none
+testing:
+  framework: smoke
+  directories:
+    - tests/
+linting:
+  formatters: []
+validation:
+  required_tasks: [build, test]
+  optional_tasks: []
+  install_task: none
+  evidence_directory: .sdlc/evidence
+quality_security:
+  risk_profile: low
+  required_test_layers: [unit]
+  acceptance_mapping_required: true
+security:
+  review_required: false
+  tasks: []
+  blocking_severities: [critical, high]
+verification:
+  coverage_enabled: true
+  coverage_task: coverage
+  coverage_provider: generic-json
+  coverage_report_path: .sdlc/reports/coverage.json
+  coverage_changed_line_threshold: 80
+  coverage_excluded_paths: [tests/**]
+  coverage_required_risk_profiles: [low]
+  mutation_enabled: false
+  mutation_task: mutation
+  mutation_provider: generic-json
+  mutation_report_path: .sdlc/reports/mutation.json
+  mutation_threshold: 80
+  mutation_excluded_paths: []
+  mutation_required_risk_profiles: []
+tasks:
+  build:
+    executable: python
+    args: [--version]
+  test:
+    executable: python
+    args: [--version]
+  coverage:
+    executable: python
+    args: [tests/write-coverage-report.py, pass]

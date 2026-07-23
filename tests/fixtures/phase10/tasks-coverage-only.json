@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "feature_id": "alpha",
+  "spec_path": "docs/specs/alpha/spec.md",
+  "manual_verifications": [],
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Verify alpha behavior",
+      "description": "Use changed-line coverage as the only verification.",
+      "requirement_refs": ["REQ-001"],
+      "acceptance_refs": ["AC-001"],
+      "depends_on": [],
+      "planned_files": ["src/app.py"],
+      "verification_tasks": ["coverage"],
+      "status": "TODO",
+      "release_blocking": true,
+      "evidence": []
+    }
+  ]
+}

@@ -129,6 +129,31 @@ require an owner, rationale, approver, approval ID, and timestamp. The phase
 validator applies the same rules before `REVIEW` and `DONE`; task evidence is
 recorded without changing final task status.
 
+## Meaningful Verification
+
+CG-3 verification is configured in the one-level `verification` section of
+`.github/sdlc-config.yml`. A project that enables changed-line coverage must
+configure the `coverage` named task, a supported provider (`coverage-py-json`
+or `generic-json`), a safe JSON report path, a `0`-through-`100` threshold,
+excluded paths, and the risk profiles that require the check. Mutation uses
+the `mutation` task and `generic-json`; its report also records the mutator
+name/version and a disposition for every survivor.
+
+The configured task runs first. The runner then invokes `scripts/verification.py`
+and writes `.sdlc/evidence/coverage.json` or `.sdlc/evidence/mutation.json`.
+Reports must include `commit_sha` and `tree_digest` matching the task gate. The
+runner exposes those values to report producers as `SDLC_COMMIT_SHA` and
+`SDLC_TREE_DIGEST`. Missing, stale, malformed, or below-threshold reports fail.
+When no changed executable lines remain after report intersection and
+exclusions, coverage records `NOT_APPLICABLE` with exit code `0`; the normal
+test task still runs and remains required.
+
+At `TESTING -> DONE` and `TESTING -> DEPLOYMENT_READINESS`, the phase validator
+requires a current `PASS` gate for each check required by the selected risk
+profile. Task graphs reject coverage or mutation as the only verification for
+an acceptance criterion. Machine-readable evidence, not a manually supplied
+percentage, is the source of truth.
+
 ## Release Assurance
 
 For deployable repositories, install the `release-assurance` extension and set
