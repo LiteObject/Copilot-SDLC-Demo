@@ -29,6 +29,6 @@ consumer project.
   installer behavior.
 - Keep PowerShell and Bash validators, task runners, security/release scripts,
   governance scripts, and verification adapters behaviorally aligned; run the
-  `tests/phase0/` through `tests/phase10/` harnesses after changes.
+  `tests/phase0/` through `tests/phase11/` harnesses after changes.
 - Do not reintroduce arbitrary shell command evaluation into the task registry
   or GitHub Actions workflows.

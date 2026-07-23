@@ -4,6 +4,8 @@
 template:
   name: copilot-sdlc
   version: 1.0.0
+  supported_installers: [1.0.0]
+  compatibility_policy: "Template 1.x supports installer 1.x; project-owned files are never overwritten automatically."
   description: VS Code Copilot AI-SDLC customization payload.
 
 base:
@@ -14,52 +16,75 @@ base:
     - .github/agents/
     - .github/instructions/
     - .github/prompts/
+    - docs/portable-agent-contract.md
     - docs/spec.md
     - scripts/check-phase.ps1
     - scripts/check-phase.sh
     - scripts/feature-context.ps1
     - scripts/feature-context.sh
+    - scripts/generate-agent-surfaces.ps1
+    - scripts/generate-agent-surfaces.sh
     - scripts/task-graph.py
     - scripts/verification.py
     - scripts/migrate-spec.ps1
     - scripts/migrate-spec.sh
     - scripts/validate-sdlc-config.ps1
     - scripts/validate-sdlc-config.sh
+    - scripts/validate-agent-surfaces.ps1
+    - scripts/validate-agent-surfaces.sh
     - scripts/run-sdlc-task.ps1
     - scripts/run-sdlc-task.sh
     - scripts/run-security-scans.ps1
     - scripts/run-security-scans.sh
     - scripts/scope-audit.ps1
     - scripts/scope-audit.sh
+    - scripts/sdlc.py
 
 extensions:
   frontend:
     path: extensions/frontend
+    version: 1.0.0
+    compatible_template: ">=1.0.0 <2.0.0"
     description: Frontend UX and accessibility standards.
   deployment-readiness:
     path: extensions/deployment-readiness
+    version: 1.0.0
+    compatible_template: ">=1.0.0 <2.0.0"
     description: Pre-deployment readiness checklist and guidance.
   github-actions:
     path: extensions/github-actions
+    version: 1.0.0
+    compatible_template: ">=1.0.0 <2.0.0"
     description: Optional issue-triggered GitHub Actions validation workflow.
   release-assurance:
     path: extensions/release-assurance
+    version: 1.0.0
+    compatible_template: ">=1.0.0 <2.0.0"
     description: Artifact, SBOM, provenance, promotion, smoke-test, and rollback assurance.
   operational-readiness:
     path: extensions/operational-readiness
+    version: 1.0.0
+    compatible_template: ">=1.0.0 <2.0.0"
     description: Observability, service objectives, incident response, runbooks, and production feedback controls.
   ai-governance:
     path: extensions/ai-governance
+    version: 1.0.0
+    compatible_template: ">=1.0.0 <2.0.0"
     description: AI-assisted development policy, graduated autonomy, least-privilege permissions, prompt-injection resistance, audit ledger, and agent evaluation controls.
   ai-lifecycle:
     path: extensions/ai-lifecycle
+    version: 1.0.0
+    compatible_template: ">=1.0.0 <2.0.0"
     description: AI product impact assessment, inventory, evaluation, red-team, runtime safety, monitoring, rollback, and decommissioning controls.
   measurement:
     path: extensions/measurement
+    version: 1.0.0
+    compatible_template: ">=1.0.0 <2.0.0"
     description: Outcome measurement, metric ownership, privacy review, continuous-improvement evidence, and quarterly process review.
 
 ownership:
   template_owned:
+    - AGENTS.md
     - .github/copilot-instructions.md
     - .github/agents/**
     - .github/instructions/**
@@ -79,8 +104,13 @@ ownership:
     - scripts/scope-audit.sh
     - scripts/feature-context.ps1
     - scripts/feature-context.sh
+    - scripts/generate-agent-surfaces.ps1
+    - scripts/generate-agent-surfaces.sh
     - scripts/task-graph.py
     - scripts/verification.py
+    - scripts/validate-agent-surfaces.ps1
+    - scripts/validate-agent-surfaces.sh
+    - docs/portable-agent-contract.md
   project_owned:
     - .github/sdlc-config.yml
     - docs/spec.md

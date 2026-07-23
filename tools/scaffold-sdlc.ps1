@@ -33,6 +33,15 @@
     Create a new project-owned feature spec at
     docs/specs/<feature-id>/spec.md. Existing docs/spec.md is preserved.
 
+.PARAMETER AgentSurface
+    Select the generated agent surface: copilot (default), generic, or all.
+
+.PARAMETER UpdateAgentSurface
+    Show a diff and explicitly replace a project-owned or modified agent adapter.
+
+.PARAMETER PreviewAgentSurface
+    Preview the generated generic adapter without changing it.
+
 .EXAMPLE
     ./tools/scaffold-sdlc.ps1 -Target ../my-project
 
@@ -59,10 +68,39 @@ param(
 
     [switch] $ValidateConfig,
 
-    [string] $FeatureId
+    [string] $FeatureId,
+
+    [ValidateSet('copilot', 'generic', 'all')]
+    [string] $AgentSurface = 'copilot',
+
+    [switch] $UpdateAgentSurface,
+
+    [switch] $PreviewAgentSurface
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($env:SDLC_CANONICAL_BACKEND -ne '1') {
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $python) {
+        $python = Get-Command py -ErrorAction SilentlyContinue
+    }
+    if (-not $python) {
+        throw 'Python 3.9 or newer is required for the sdlc CLI.'
+    }
+    $cli = Join-Path $PSScriptRoot 'sdlc.py'
+    $arguments = @('init', '--target', $Target, '--template', $Template, '--agent-surface', $AgentSurface)
+    foreach ($name in $Extension) { $arguments += @('--extension', $name) }
+    foreach ($value in $Variable) { $arguments += @('--variable', $value) }
+    if ($Force) { $arguments += '--force' }
+    if ($ValidateConfig) { $arguments += '--validate-config' }
+    if ($FeatureId) { $arguments += @('--feature-id', $FeatureId) }
+    if ($UpdateAgentSurface) { $arguments += '--update-agent-surface' }
+    if ($PreviewAgentSurface) { $arguments += '--preview-agent-surface' }
+    & $python.Source $cli @arguments
+    exit $LASTEXITCODE
+}
+
 $RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $TemplateRoot = Join-Path $RepoRoot 'template/base'
 $ExtensionsRoot = Join-Path $RepoRoot 'template/extensions'
@@ -170,6 +208,9 @@ function Get-TemplateEntries {
         if ([string]::IsNullOrWhiteSpace($relativePath)) {
             continue
         }
+        if ($relativePath -match '(^|[\\/])__pycache__([\\/]|$)|\.pyc$') {
+            continue
+        }
 
         $firstPart = ($relativePath -split '[\\/]')[0]
         if ($firstPart -eq '.git') {
@@ -269,6 +310,24 @@ function Get-FileSha256 {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
 }
 
+function Get-TextSha256 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string] $Text
+    )
+
+    $normalized = (($Text -replace "`r`n", "`n") -replace "`r", "`n").TrimEnd("`n")
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($normalized)
+        return ([System.BitConverter]::ToString($sha256.ComputeHash($bytes)).Replace('-', '')).ToLowerInvariant()
+    }
+    finally {
+        $sha256.Dispose()
+    }
+}
+
 function Write-TemplateEntry {
     param(
         [Parameter(Mandatory = $true)]
@@ -300,6 +359,71 @@ function Write-TemplateEntry {
     }
 }
 
+function Show-TextDiff {
+    param(
+        [string] $CurrentPath,
+        [string] $CandidatePath
+    )
+
+    $current = if (Test-Path -LiteralPath $CurrentPath -PathType Leaf) {
+        @(Get-Content -LiteralPath $CurrentPath)
+    }
+    else {
+        @()
+    }
+    $candidate = @(Get-Content -LiteralPath $CandidatePath)
+    Write-Host "--- $CurrentPath"
+    Write-Host '+++ generated candidate'
+    foreach ($line in @(Compare-Object -ReferenceObject $current -DifferenceObject $candidate)) {
+        $prefix = if ($line.SideIndicator -eq '=>') { '+' } else { '-' }
+        Write-Host "$prefix$($line.InputObject)"
+    }
+}
+
+function Update-ExplicitCopilotAdapter {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject] $Entry,
+
+        [Parameter(Mandatory = $true)]
+        [string] $Destination,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable] $Tokens
+    )
+
+    $temporaryCandidate = Join-Path ([System.IO.Path]::GetTempPath()) "sdlc-copilot-$([guid]::NewGuid().ToString('N')).md"
+    try {
+        Write-TemplateEntry -Entry $Entry -Destination $temporaryCandidate -Tokens $Tokens
+        $current = if (Test-Path -LiteralPath $Destination -PathType Leaf) {
+            [System.IO.File]::ReadAllText($Destination)
+        }
+        else {
+            ''
+        }
+        $candidate = [System.IO.File]::ReadAllText($temporaryCandidate)
+        if ($current -ceq $candidate) {
+            Write-Host "  kept    .github/copilot-instructions.md (already current)"
+            return if (Test-Path -LiteralPath $Destination -PathType Leaf) { Get-FileSha256 -Path $Destination } else { '' }
+        }
+
+        Show-TextDiff -CurrentPath $Destination -CandidatePath $temporaryCandidate
+        if ($PreviewAgentSurface) {
+            Write-Host '  preview .github/copilot-instructions.md (no changes written)'
+            return ''
+        }
+
+        Write-TemplateEntry -Entry $Entry -Destination $Destination -Tokens $Tokens
+        Write-Host '  updated .github/copilot-instructions.md (explicit agent-surface update)'
+        return Get-FileSha256 -Path $Destination
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryCandidate) {
+            Remove-Item -LiteralPath $temporaryCandidate -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Write-InstallerState {
     param(
         [Parameter(Mandatory = $true)]
@@ -311,7 +435,21 @@ function Write-InstallerState {
         [Parameter(Mandatory = $true)]
         [string] $TemplateName,
 
-        [string[]] $ExtensionNames = @()
+        [string[]] $ExtensionNames = @(),
+
+        [string] $TemplateVersion = '',
+
+        [string] $AgentSurface = 'copilot',
+
+        [string] $PortableContractHash = '',
+
+        [string] $ManifestSha256 = '',
+
+        [string] $SourceRevision = 'unknown',
+
+        [string] $Platform = 'unknown',
+
+        [hashtable] $ExtensionVersions = @{}
     )
 
     $parent = Split-Path -Parent $Path
@@ -332,9 +470,21 @@ function Write-InstallerState {
 
     $state = [ordered]@{
         schemaVersion = 1
+        stateVersion = 2
         installer     = 'Copilot-SDLC-Demo'
+        installerVersion = '1.0.0'
         template      = $TemplateName
+        templateVersion = $TemplateVersion
+        installedTemplateVersion = $TemplateVersion
+        agentSurface  = $AgentSurface
+        portableContractSha256 = $PortableContractHash
+        manifestSha256 = $ManifestSha256
+        manifestHash = $ManifestSha256
+        sourceRevision = $SourceRevision
+        platform = $Platform
+        installedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
         extensions    = @($ExtensionNames)
+        extensionVersions = $ExtensionVersions
         files         = @($records.ToArray())
     }
 
@@ -392,6 +542,50 @@ function Get-ManifestBaseInstalls {
     }
 
     return $installs.ToArray()
+}
+
+function Get-ManifestTemplateVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Path
+    )
+
+    foreach ($rawLine in [System.IO.File]::ReadAllLines($Path)) {
+        $trimmed = $rawLine.Trim()
+        if ($trimmed -match '^version:\s*(.+)$') {
+            return $Matches[1].Trim().Trim('"', "'")
+        }
+    }
+
+    throw "Template version is missing from $Path"
+}
+
+function Get-ManifestExtensionVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Path,
+
+        [Parameter(Mandatory = $true)]
+        [string] $Name
+    )
+
+    $extensionHeader = '^  ' + [regex]::Escape($Name) + ':\s*$'
+    $inExtension = $false
+    foreach ($rawLine in [System.IO.File]::ReadAllLines($Path)) {
+        $line = $rawLine.TrimEnd("`r")
+        if ($line -match $extensionHeader) {
+            $inExtension = $true
+            continue
+        }
+        if ($inExtension -and $line -match '^  [A-Za-z0-9._-]+:\s*$') {
+            break
+        }
+        if ($inExtension -and $line -match '^    version:\s*(.+)$') {
+            return $Matches[1].Trim().Trim('"', "'")
+        }
+    }
+
+    return 'unknown'
 }
 
 function Assert-ManifestCoversBase {
@@ -485,6 +679,17 @@ $manifestPath = Join-Path $RepoRoot 'template/manifest.yml'
 $baseOutputs = @($baseEntries | ForEach-Object { ConvertTo-InstallerRelativePath -Path ([string]$_.RelativePath) })
 $manifestInstalls = @(Get-ManifestBaseInstalls -Path $manifestPath)
 Assert-ManifestCoversBase -Installs $manifestInstalls -BaseOutputs $baseOutputs -ManifestPath $manifestPath
+$TemplateVersion = Get-ManifestTemplateVersion -Path $manifestPath
+$PortableContractPath = Join-Path $TemplateRoot 'docs/portable-agent-contract.md'
+if (-not (Test-Path -LiteralPath $PortableContractPath -PathType Leaf)) {
+    throw "Portable agent contract not found: $PortableContractPath"
+}
+$PortableContractHash = (Get-FileSha256 -Path $PortableContractPath).ToLowerInvariant()
+$CopilotAdapterTemplatePath = Join-Path $TemplateRoot '.github/copilot-instructions.md.template'
+if (-not (Test-Path -LiteralPath $CopilotAdapterTemplatePath -PathType Leaf)) {
+    throw "Copilot adapter template not found: $CopilotAdapterTemplatePath"
+}
+$CopilotAdapterTemplateHash = Get-TextSha256 -Text ([System.IO.File]::ReadAllText($CopilotAdapterTemplatePath))
 
 $extensionRoots = @()
 foreach ($extensionName in $Extension) {
@@ -534,6 +739,9 @@ $templateTokens = @{
     ProjectName  = $projectName
     ProjectRoot  = $TargetRoot
     Template     = $Template
+    TemplateVersion = $TemplateVersion
+    PortableContractHash = $PortableContractHash
+    CopilotAdapterTemplateHash = $CopilotAdapterTemplateHash
     PROJECT_NAME = $projectName
     PROJECT_ROOT = $TargetRoot
 }
@@ -641,7 +849,7 @@ foreach ($manifestPath in $installOrder) {
         $recordedHash = [string]($managedFiles[$manifestPath])
         $currentHash = Get-FileSha256 -Path $destination
         if ([string]::IsNullOrWhiteSpace($recordedHash) -or
-            ($currentHash -cne $recordedHash)) {
+            ($currentHash -ine $recordedHash)) {
             Write-Host "  kept    $($entry.RelativePath) (modified after install)"
             $leftUntouched += 1
             continue
@@ -666,8 +874,80 @@ foreach ($manifestPath in $installOrder) {
     Write-Host "  $verb  $($entry.RelativePath)"
 }
 
+$copilotKey = '.github/copilot-instructions.md'
+if ($UpdateAgentSurface -and $AgentSurface -in @('copilot', 'all') -and $planned.ContainsKey($copilotKey)) {
+    $copilotHash = Update-ExplicitCopilotAdapter `
+        -Entry $planned[$copilotKey].Entry `
+        -Destination (Join-Path $TargetRoot $copilotKey) `
+        -Tokens $templateTokens
+    if (-not [string]::IsNullOrWhiteSpace($copilotHash) -and -not $PreviewAgentSurface) {
+        $nextManagedFiles[$copilotKey] = $copilotHash
+    }
+}
+
+$agentWasPresent = Test-Path -LiteralPath (Join-Path $TargetRoot 'AGENTS.md') -PathType Leaf
+$agentWasManaged = $managedFiles.ContainsKey('AGENTS.md')
+$agentRecordedHash = if ($agentWasManaged) { [string]$managedFiles['AGENTS.md'] } else { '' }
+$agentHashBefore = if ($agentWasPresent) { Get-FileSha256 -Path (Join-Path $TargetRoot 'AGENTS.md') } else { '' }
+$agentCanRefresh = $agentWasManaged -and ($agentHashBefore -ieq $agentRecordedHash)
+if ($AgentSurface -in @('generic', 'all')) {
+    $generatorPath = Join-Path $TemplateRoot 'scripts/generate-agent-surfaces.ps1'
+    $generatorArguments = @(
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        $generatorPath,
+        '-RepoRoot',
+        $TargetRoot,
+        '-Surface',
+        'generic',
+        '-TemplateVersion',
+        $TemplateVersion
+    )
+    if ($PreviewAgentSurface) {
+        $generatorArguments += '-Preview'
+    }
+    elseif ($UpdateAgentSurface) {
+        $generatorArguments += '-Update'
+    }
+    elseif ($Force) {
+        $generatorArguments += '-Force'
+    }
+    & pwsh @generatorArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Generic agent surface generation failed with exit code $LASTEXITCODE."
+    }
+
+    $agentPath = Join-Path $TargetRoot 'AGENTS.md'
+    if (Test-Path -LiteralPath $agentPath -PathType Leaf) {
+        $agentHashAfter = Get-FileSha256 -Path $agentPath
+        $agentCreated = -not $agentWasPresent
+        $agentUpdateApplied = $UpdateAgentSurface -and -not $PreviewAgentSurface
+        if ($agentCreated -or $agentCanRefresh -or $agentUpdateApplied -or
+            ($agentWasManaged -and $agentHashAfter -ieq $agentRecordedHash)) {
+            $nextManagedFiles['AGENTS.md'] = $agentHashAfter
+        }
+    }
+}
+
+$ManifestSha256 = (Get-FileSha256 -Path (Join-Path $RepoRoot 'template/manifest.yml')).ToLowerInvariant()
+$SourceRevision = (& git -C $RepoRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+if ([string]::IsNullOrWhiteSpace([string]$SourceRevision)) {
+    $SourceRevision = 'unknown'
+}
+$PlatformName = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription
+$ExtensionVersions = @{}
+foreach ($extensionName in $Extension) {
+    $ExtensionVersions[$extensionName] = if ([System.IO.Path]::IsPathRooted($extensionName) -or $extensionName -match '[\\/]') { 'unknown' } else { Get-ManifestExtensionVersion -Path (Join-Path $RepoRoot 'template/manifest.yml') -Name $extensionName }
+}
+
 Write-InstallerState -Path $StatePath -Files $nextManagedFiles `
-    -TemplateName $Template -ExtensionNames @($Extension)
+    -TemplateName $Template -ExtensionNames @($Extension) `
+    -TemplateVersion $TemplateVersion -AgentSurface $AgentSurface `
+    -PortableContractHash $PortableContractHash -ManifestSha256 $ManifestSha256 `
+    -SourceRevision ([string]$SourceRevision) -Platform $PlatformName `
+    -ExtensionVersions $ExtensionVersions
 Write-Host "  recorded installer ownership in $StateRelativePath"
 
 if ($FeatureId) {

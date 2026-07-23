@@ -2,17 +2,32 @@
 
 set -euo pipefail
 
+if [[ "${SDLC_CANONICAL_BACKEND:-0}" != 1 ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  PYTHON=''
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    PYTHON="$(command -v python)"
+  fi
+  [[ -n "$PYTHON" ]] || { echo 'Python 3.9 or newer is required for the sdlc CLI.' >&2; exit 1; }
+  exec "$PYTHON" "$SCRIPT_DIR/sdlc.py" init "$@"
+fi
+
 usage() {
   cat <<'EOF'
 Installs the Copilot SDLC base payload into a target folder.
 
 Usage:
-  ./tools/scaffold-sdlc.sh <target> [--feature-id <id>] [--extension <name>] [--force] [--validate-config]
+  ./tools/scaffold-sdlc.sh <target> [--feature-id <id>] [--extension <name>] [--agent-surface copilot|generic|all] [--force] [--validate-config]
 
 Options:
   --template <name>       Template name; base is currently available.
   --extension <name>      Install an extension from template/extensions.
   --feature-id <id>       Create docs/specs/<id>/spec.md without replacing docs/spec.md.
+  --agent-surface <name>  Select copilot (default), generic, or all agent surfaces.
+  --update-agent-surface  Preview and explicitly replace a project-owned adapter.
+  --preview-agent-surface Preview generated adapters without changing them.
   --variable Name=Value   Render a template variable.
   --force                 Refresh unchanged template-owned files.
   --validate-config       Run the installed config validator and fail until configured.
@@ -29,6 +44,9 @@ VALIDATE_CONFIG=0
 TARGET=''
 FEATURE_ID=''
 TEMPLATE='base'
+AGENT_SURFACE='copilot'
+UPDATE_AGENT_SURFACE=0
+PREVIEW_AGENT_SURFACE=0
 EXTENSIONS=()
 VARIABLES=()
 
@@ -46,6 +64,19 @@ while (( $# > 0 )); do
       [[ $# -ge 2 ]] || { echo 'Missing value for --feature-id.' >&2; exit 1; }
       FEATURE_ID="$2"
       shift 2
+      ;;
+    --agent-surface)
+      [[ $# -ge 2 ]] || { echo 'Missing value for --agent-surface.' >&2; exit 1; }
+      AGENT_SURFACE="$2"
+      shift 2
+      ;;
+    --update-agent-surface)
+      UPDATE_AGENT_SURFACE=1
+      shift
+      ;;
+    --preview-agent-surface)
+      PREVIEW_AGENT_SURFACE=1
+      shift
       ;;
     --template)
       [[ $# -ge 2 ]] || { echo 'Missing value for --template.' >&2; exit 1; }
@@ -104,6 +135,10 @@ if [[ "$TEMPLATE" != 'base' ]]; then
   echo "Template '$TEMPLATE' is not available. The repository provides the 'base' template." >&2
   exit 1
 fi
+case "$AGENT_SURFACE" in
+  copilot|generic|all) ;;
+  *) echo "Unsupported agent surface: $AGENT_SURFACE. Use copilot, generic, or all." >&2; exit 1 ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -188,6 +223,9 @@ add_root_to_plan() {
   local file
 
   while IFS= read -r -d '' file; do
+    case "$file" in
+      */__pycache__/*|*.pyc) continue ;;
+    esac
     add_file_to_plan "$root" "$file" "$layer"
   done < <(find "$root" -type f -print0)
 }
@@ -241,6 +279,29 @@ read_manifest_base_installs() {
       }
     }
   '
+}
+
+read_manifest_template_version() {
+  local manifest="$1"
+  [[ -f "$manifest" ]] || die "Template manifest not found: $manifest"
+  awk '/^[[:space:]]{2}version:[[:space:]]*/ { value = $0; sub(/^[[:space:]]{2}version:[[:space:]]*/, "", value); sub(/[[:space:]#].*$/, "", value); print value; exit }' "$manifest"
+}
+
+read_manifest_extension_version() {
+  local manifest="$1" name="$2"
+  awk -v target="$name" '
+    { sub(/\r$/, "") }
+    $0 == "  " target ":" { in_extension = 1; next }
+    in_extension && $0 ~ /^  [A-Za-z0-9._-]+:/ { in_extension = 0 }
+    in_extension && $0 ~ /^    version:/ {
+      value = $0
+      sub(/^    version:[[:space:]]*/, "", value)
+      if (!found) {
+        print value
+        found = 1
+      }
+    }
+  ' "$manifest"
 }
 
 assert_manifest_covers_base() {
@@ -345,6 +406,37 @@ sha256_file() {
   fi
 }
 
+sha256_text() {
+  local text="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$text" | sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$text" | shasum -a 256 | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    printf '%s' "$text" | openssl dgst -sha256 | awk '{print $NF}'
+  else
+    die 'A SHA-256 utility is required: sha256sum, shasum, or openssl.'
+  fi
+}
+
+TEMPLATE_VERSION="$(read_manifest_template_version "$MANIFEST_PATH")"
+[[ -n "$TEMPLATE_VERSION" ]] || die "Template version is missing from $MANIFEST_PATH"
+MANIFEST_SHA256="$(sha256_file "$MANIFEST_PATH")"
+SOURCE_REVISION="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf '%s' unknown)"
+PLATFORM_NAME="$(uname -s 2>/dev/null || printf '%s' unknown)"
+INSTALLER_VERSION='1.0.0'
+PORTABLE_CONTRACT_RELATIVE='docs/portable-agent-contract.md'
+PORTABLE_CONTRACT_PATH="$TEMPLATE_ROOT/$PORTABLE_CONTRACT_RELATIVE"
+[[ -f "$PORTABLE_CONTRACT_PATH" ]] || die "Portable agent contract not found: $PORTABLE_CONTRACT_PATH"
+PORTABLE_CONTRACT_HASH="$(sha256_file "$PORTABLE_CONTRACT_PATH")"
+COPILOT_ADAPTER_TEMPLATE_PATH="$TEMPLATE_ROOT/.github/copilot-instructions.md.template"
+[[ -f "$COPILOT_ADAPTER_TEMPLATE_PATH" ]] || die "Copilot adapter template not found: $COPILOT_ADAPTER_TEMPLATE_PATH"
+COPILOT_ADAPTER_TEMPLATE_TEXT="$(tr -d '\r' < "$COPILOT_ADAPTER_TEMPLATE_PATH")"
+COPILOT_ADAPTER_TEMPLATE_HASH="$(sha256_text "$COPILOT_ADAPTER_TEMPLATE_TEXT")"
+tokens[TemplateVersion]="$TEMPLATE_VERSION"
+tokens[PortableContractHash]="$PORTABLE_CONTRACT_HASH"
+tokens[CopilotAdapterTemplateHash]="$COPILOT_ADAPTER_TEMPLATE_HASH"
+
 json_escape() {
   local value="$1"
   value="${value//\\/\\\\}"
@@ -401,6 +493,44 @@ render_or_copy() {
   fi
 }
 
+show_text_diff() {
+  local current="$1" candidate="$2"
+  if [[ -f "$current" ]]; then
+    set +e
+    diff -u "$current" "$candidate"
+    set -e
+  else
+    echo '--- /dev/null'
+    echo "+++ $current"
+    sed 's/^/+/' "$candidate"
+  fi
+}
+
+COPILOT_UPDATE_HASH=''
+update_copilot_adapter() {
+  local source="$1" destination="$2" render="$3" candidate
+  candidate="$(mktemp "${TMPDIR:-/tmp}/sdlc-copilot.XXXXXX")"
+  render_or_copy "$source" "$candidate" "$render"
+  if [[ -f "$destination" ]] && cmp -s "$destination" "$candidate"; then
+    echo '  kept    .github/copilot-instructions.md (already current)'
+    COPILOT_UPDATE_HASH="$(sha256_file "$destination")"
+    rm -f "$candidate"
+    return
+  fi
+
+  show_text_diff "$destination" "$candidate"
+  if (( PREVIEW_AGENT_SURFACE == 1 )); then
+    echo '  preview .github/copilot-instructions.md (no changes written)'
+    rm -f "$candidate"
+    return
+  fi
+
+  render_or_copy "$source" "$destination" "$render"
+  COPILOT_UPDATE_HASH="$(sha256_file "$destination")"
+  echo '  updated .github/copilot-instructions.md (explicit agent-surface update)'
+  rm -f "$candidate"
+}
+
 declare -A next_hash=()
 written=0
 untouched=0
@@ -436,7 +566,7 @@ for relative in "${plan_order[@]}"; do
 
     recorded_hash="${managed_hash[$relative]}"
     current_hash="$(sha256_file "$destination")"
-    if [[ "$current_hash" != "$recorded_hash" ]]; then
+    if [[ "${current_hash,,}" != "${recorded_hash,,}" ]]; then
       echo "  kept    $relative (modified after install)"
       (( untouched += 1 ))
       continue
@@ -459,19 +589,92 @@ for relative in "${plan_order[@]}"; do
   (( written += 1 ))
 done
 
+copilot_key='.github/copilot-instructions.md'
+if (( UPDATE_AGENT_SURFACE == 1 )) && [[ "$AGENT_SURFACE" == copilot || "$AGENT_SURFACE" == all ]]; then
+  update_copilot_adapter "${planned_source[$copilot_key]}" "$TARGET_ROOT/$copilot_key" "${planned_render[$copilot_key]}"
+  if [[ -n "$COPILOT_UPDATE_HASH" && $PREVIEW_AGENT_SURFACE -eq 0 ]]; then
+    next_hash["$copilot_key"]="$COPILOT_UPDATE_HASH"
+  fi
+fi
+
+agent_path="$TARGET_ROOT/AGENTS.md"
+agent_was_present=0
+[[ -f "$agent_path" ]] && agent_was_present=1
+agent_was_managed=0
+agent_recorded_hash=''
+if [[ -n "${managed_hash[AGENTS.md]+present}" ]]; then
+  agent_was_managed=1
+  agent_recorded_hash="${managed_hash[AGENTS.md]}"
+fi
+agent_hash_before=''
+if (( agent_was_present == 1 )); then
+  agent_hash_before="$(sha256_file "$agent_path")"
+fi
+agent_can_refresh=0
+if (( agent_was_managed == 1 )) && [[ "${agent_hash_before,,}" == "${agent_recorded_hash,,}" ]]; then
+  agent_can_refresh=1
+fi
+
+if [[ "$AGENT_SURFACE" == generic || "$AGENT_SURFACE" == all ]]; then
+  generator_args=(
+    --repo-root "$TARGET_ROOT"
+    --surface generic
+    --template-version "$TEMPLATE_VERSION"
+  )
+  if (( PREVIEW_AGENT_SURFACE == 1 )); then
+    generator_args+=(--preview)
+  elif (( UPDATE_AGENT_SURFACE == 1 )); then
+    generator_args+=(--update)
+  elif (( FORCE == 1 )); then
+    generator_args+=(--force)
+  fi
+  bash "$REPO_ROOT/template/base/scripts/generate-agent-surfaces.sh" "${generator_args[@]}"
+
+  if [[ -f "$agent_path" ]]; then
+    agent_hash_after="$(sha256_file "$agent_path")"
+    agent_created=0
+    (( agent_was_present == 0 )) && agent_created=1
+    agent_update_applied=0
+    (( UPDATE_AGENT_SURFACE == 1 && PREVIEW_AGENT_SURFACE == 0 )) && agent_update_applied=1
+    if (( agent_created == 1 || agent_can_refresh == 1 || agent_update_applied == 1 )) ||
+      { (( agent_was_managed == 1 )) && [[ "${agent_hash_after,,}" == "${agent_recorded_hash,,}" ]]; }; then
+      next_hash[AGENTS.md]="$agent_hash_after"
+    fi
+  fi
+fi
+
 mkdir -p "$state_dir"
 state_tmp="$state_path.tmp"
 {
   printf '{\n'
   printf '  "schemaVersion": 1,\n'
   printf '  "installer": "Copilot-SDLC-Demo",\n'
+  printf '  "stateVersion": 2,\n'
+  printf '  "installerVersion": "%s",\n' "$(json_escape "$INSTALLER_VERSION")"
   printf '  "template": "%s",\n' "$(json_escape "$TEMPLATE")"
+  printf '  "templateVersion": "%s",\n' "$(json_escape "$TEMPLATE_VERSION")"
+  printf '  "installedTemplateVersion": "%s",\n' "$(json_escape "$TEMPLATE_VERSION")"
+  printf '  "agentSurface": "%s",\n' "$(json_escape "$AGENT_SURFACE")"
+  printf '  "portableContractSha256": "%s",\n' "$(json_escape "$PORTABLE_CONTRACT_HASH")"
+  printf '  "manifestSha256": "%s",\n' "$(json_escape "$MANIFEST_SHA256")"
+  printf '  "manifestHash": "%s",\n' "$(json_escape "$MANIFEST_SHA256")"
+  printf '  "sourceRevision": "%s",\n' "$(json_escape "$SOURCE_REVISION")"
+  printf '  "platform": "%s",\n' "$(json_escape "$PLATFORM_NAME")"
+  printf '  "installedAt": "%s",\n' "$(json_escape "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
   printf '  "extensions": ['
   for (( index = 0; index < ${#EXTENSIONS[@]}; index++ )); do
     (( index > 0 )) && printf ', '
     printf '"%s"' "$(json_escape "${EXTENSIONS[$index]}")"
   done
-  printf '],\n  "files": [\n'
+  printf '],\n  "extensionVersions": {'
+  for (( index = 0; index < ${#EXTENSIONS[@]}; index++ )); do
+    extension_name="$(basename "${EXTENSIONS[$index]}")"
+    extension_version="$(read_manifest_extension_version "$MANIFEST_PATH" "$extension_name")"
+    [[ -n "$extension_version" ]] || extension_version='unknown'
+    (( index > 0 )) && printf ', '
+    printf '"%s": "%s"' "$(json_escape "${EXTENSIONS[$index]}")" "$(json_escape "$extension_version")"
+  done
+  printf '},\n  "files": [\n'
   sorted_keys=()
   if (( ${#next_hash[@]} > 0 )); then
     mapfile -t sorted_keys < <(printf '%s\n' "${!next_hash[@]}" | LC_ALL=C sort)

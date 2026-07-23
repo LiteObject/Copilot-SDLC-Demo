@@ -74,9 +74,10 @@ work, and why Copilot customization over a backend), see
 The current implementation is a lightweight, human-supervised AI-assisted SDLC
 template. [docs/roadmap.md](docs/roadmap.md) defines the dependency-ordered work
 needed to add enforceable workflow gates, wider quality and security validation,
-release and operational controls, and lifecycle controls needed when the product
-itself uses AI. Phases 0 through 7 are implemented; Phases 6 and 7 remain
-opt-in where their product or process controls apply.
+release and operational controls, lifecycle controls needed when the product
+itself uses AI, and distribution and upgrade controls. Phases 0 through 12 are
+implemented; optional extensions remain opt-in where their product or process
+controls apply.
 
 ## Repository layout
 
@@ -90,7 +91,7 @@ Copilot-SDLC-Demo/
 │  ├─ base/                         <- installed into every target repository
 │  │  ├─ .github/                   <- agents, base instructions, prompts, config
 │  │  ├─ docs/spec.md               <- installed project state template
-│  │  └─ scripts/                   <- phase, config, task, migration, and scope validation scripts
+│  │  └─ scripts/                   <- phase, config, task, migration, surface, and scope validation scripts
 │  └─ extensions/                   <- opt-in target capabilities
 │     ├─ deployment-readiness/
 │     ├─ frontend/
@@ -102,9 +103,13 @@ Copilot-SDLC-Demo/
 │     └─ measurement/
 ├─ tools/
 │  ├─ scaffold-sdlc.ps1             <- Windows/PowerShell installer
-│  └─ scaffold-sdlc.sh              <- Bash installer
+│  ├─ scaffold-sdlc.sh              <- Bash installer
+│  ├─ sdlc.py                       <- distribution CLI entry point
+│  ├─ sdlc.ps1                      <- PowerShell CLI wrapper
+│  └─ sdlc.sh                       <- Bash CLI wrapper
 ├─ docs/
 │  ├─ architecture/agent-design.md <- authoring and orchestration design
+│  ├─ guides/distribution-upgrades.md <- CG-6 installation and update contract
 │  └─ roadmap.md                    <- future implementation roadmap
 ├─ tests/phase0/                    <- authoring-repository workflow fixtures and harnesses
 ├─ tests/phase1/                    <- config and named-task validation harnesses
@@ -117,6 +122,8 @@ Copilot-SDLC-Demo/
 ├─ tests/phase8/                    <- feature-scoped workflow harnesses
 ├─ tests/phase9/                    <- task graph and task-level evidence harnesses
 ├─ tests/phase10/                   <- meaningful verification gate harnesses
+├─ tests/phase11/                   <- portable agent surface harnesses
+├─ tests/phase12/                   <- distribution and upgrade harnesses
 ├─ .github/copilot-instructions.md  <- authoring-repository rules
 ├─ README.md                        <- this file
 └─ LICENSE
@@ -136,6 +143,8 @@ belong to the consuming project's own stack.
   (Command Palette → *Developer: Reload Window*).
 - **Bash 4 or newer** for the shell installer (`tools/scaffold-sdlc.sh`); use
   PowerShell on Windows if Bash is unavailable.
+- A generic agent surface does not require VS Code or Copilot. It uses the
+  portable contract and the installed deterministic scripts.
 
 ## Use the generated workflow
 
@@ -166,6 +175,13 @@ folder:
 # Windows / PowerShell
 ./tools/scaffold-sdlc.ps1 -Target ../my-project
 
+# Add the generated generic AGENTS.md surface
+./tools/scaffold-sdlc.ps1 -Target ../my-project -AgentSurface generic
+
+# Install and validate both Copilot and generic surfaces, updating adapters only
+# through an explicit diff-previewing command when needed
+./tools/scaffold-sdlc.ps1 -Target ../my-project -AgentSurface all -UpdateAgentSurface
+
 # Fail adoption until the project's named validation tasks are configured
 ./tools/scaffold-sdlc.ps1 -Target ../my-project -ValidateConfig
 
@@ -191,6 +207,13 @@ folder:
 ```bash
 # macOS / Linux / WSL
 ./tools/scaffold-sdlc.sh ../my-project
+
+# Add the generated generic AGENTS.md surface
+./tools/scaffold-sdlc.sh ../my-project --agent-surface generic
+
+# Install and validate both Copilot and generic surfaces, explicitly updating
+# adapters only after the installer previews their diffs
+./tools/scaffold-sdlc.sh ../my-project --agent-surface all --update-agent-surface
 
 # Fail adoption until the project's named validation tasks are configured
 ./tools/scaffold-sdlc.sh ../my-project --validate-config
@@ -221,7 +244,66 @@ directories, preserve project-owned files, and record hashes in
 stop if the two have drifted. On later runs, `-Force` or `--force` refreshes
 only unchanged template-owned files. `.github/sdlc-config.yml` and `docs/spec.md`
 are project-owned after installation and are never overwritten. The installers
-do not create `src/` or `tests/`.
+do not create `src/` or `tests/`. The default `copilot` surface preserves the
+existing Copilot-only behavior. `generic` adds a generated root `AGENTS.md`,
+and `all` selects both adapters. Generated adapters include the template version
+and portable-contract hash; modified or pre-existing adapters are preserved by
+default. Use `-UpdateAgentSurface` or `--update-agent-surface` to preview and
+explicitly replace one, then run the installed portability validator.
+
+### Distribution and upgrades
+
+The versioned distribution CLI is the common contract behind both scaffold
+wrappers. Run it from the authoring checkout for installation, previews,
+updates, and release creation:
+
+```powershell
+python tools/sdlc.py init --target ../my-project --version 1.0.0
+python tools/sdlc.py diff --target ../my-project --version 1.0.0
+python tools/sdlc.py doctor --target ../my-project --source .
+python tools/sdlc.py validate --target ../my-project --source .
+python tools/sdlc.py update --target ../my-project --source ../template-1.1.0 --version 1.1.0
+python tools/sdlc.py rollback --target ../my-project
+python tools/sdlc.py release --output-dir dist
+```
+
+The Bash equivalents use `python3`. The compatibility commands
+`tools/scaffold-sdlc.ps1` and `tools/scaffold-sdlc.sh` delegate to the same
+planner and ownership rules. The full compatibility policy, pinned-install
+flow, dry-run behavior, conflict handling, rollback evidence, and checksum
+verification are documented in
+[docs/guides/distribution-upgrades.md](docs/guides/distribution-upgrades.md).
+
+### Portable agent surfaces
+
+The installed [portable agent contract](template/base/docs/portable-agent-contract.md)
+defines phase transitions, the schema, named gate commands and task IDs,
+permission rules, prohibited actions, evidence records, and escalation behavior.
+The Copilot instructions are an editor-specific adapter; subagent delegation and
+interactive approval UX are not available on every surface. The generic adapter
+uses the same contract and scripts, so it can run deterministic gates without
+VS Code or Copilot.
+
+Validate the selected projections after installation:
+
+```powershell
+./scripts/validate-agent-surfaces.ps1 -AgentSurface copilot
+./scripts/validate-agent-surfaces.ps1 -AgentSurface generic
+./scripts/validate-agent-surfaces.ps1 -AgentSurface all
+```
+
+```bash
+./scripts/validate-agent-surfaces.sh --agent-surface copilot
+./scripts/validate-agent-surfaces.sh --agent-surface generic
+./scripts/validate-agent-surfaces.sh --agent-surface all
+```
+
+When the canonical contract changes, validation fails until the selected
+projection is regenerated. Review the diff and run
+`scripts/generate-agent-surfaces.ps1 -Update` or
+`scripts/generate-agent-surfaces.sh --update` for the generic adapter; use the
+scaffold's explicit update option for the Copilot adapter. Validation writes
+`.sdlc/evidence/agent-surfaces.json`.
 
 When the `operational-readiness` extension is enabled, configure the service
 owner, on-call route, telemetry, SLIs/SLOs, review documents, runbooks, and
@@ -326,7 +408,7 @@ Start with the **configuration file** — it is the single place to set stack de
 - **Default tech stack:** note your preferences in the installed
   `.github/copilot-instructions.md` and `.github/sdlc-config.yml` in the
   consuming repo so every agent obeys them. The source default is
-  [template/base/.github/copilot-instructions.md](template/base/.github/copilot-instructions.md).
+  [template/base/.github/copilot-instructions.md.template](template/base/.github/copilot-instructions.md.template).
 
 ### Starting a new feature
 
@@ -437,9 +519,10 @@ audit but cannot edit code, which keeps review and implementation separate.
 
 > All workers set `user-invocable: false`; only `sdlc-supervisor` is invoked
 > directly. The shared rules in
-> [template/base/.github/copilot-instructions.md](template/base/.github/copilot-instructions.md) apply to every
-> agent (an `AGENTS.md` at the repo root is an equivalent alternative this repo
-> does not use).
+> The portable rules in
+> [template/base/docs/portable-agent-contract.md](template/base/docs/portable-agent-contract.md)
+> apply to every agent. The generated Copilot adapter and optional root
+> `AGENTS.md` projection point to that same contract; neither may weaken it.
 
 ## License
 
