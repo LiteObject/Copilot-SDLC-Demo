@@ -40,6 +40,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'feature-context.ps1')
+. (Join-Path $PSScriptRoot 'contract-parser.ps1')
 
 if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -53,115 +54,6 @@ $FeatureId = $workflowContext.FeatureId
 $SpecPath = $workflowContext.SpecPath
 $specRelativePath = $workflowContext.SpecRelativePath
 if ($FeatureId) { $EvidenceDirectory = $workflowContext.EvidenceDirectory } else { $EvidenceDirectory = $requestedEvidenceDirectory }
-
-function ConvertFrom-ConfigScalar {
-    param([string] $Value)
-
-    $trimmed = $Value.Trim()
-    if (($trimmed.StartsWith('"') -and $trimmed.EndsWith('"')) -or
-        ($trimmed.StartsWith("'") -and $trimmed.EndsWith("'"))) {
-        return $trimmed.Substring(1, $trimmed.Length - 2).Replace('\"', '"')
-    }
-    return ([regex]::Replace($trimmed, '\s+#.*$', '')).Trim()
-}
-
-function ConvertFrom-InlineList {
-    param([string] $Value)
-
-    $trimmed = $Value.Trim()
-    if ($trimmed -eq '[]') { return @() }
-    if (-not ($trimmed.StartsWith('[') -and $trimmed.EndsWith(']'))) {
-        throw "Expected an inline YAML list, got '$Value'."
-    }
-
-    $inner = $trimmed.Substring(1, $trimmed.Length - 2).Trim()
-    if (-not $inner) { return @() }
-    $items = New-Object System.Collections.Generic.List[string]
-    foreach ($match in [regex]::Matches($inner, '"(?:\\.|[^"\\])*"|''[^'']*''|[^,]+')) {
-        [void]$items.Add((ConvertFrom-ConfigScalar $match.Value))
-    }
-    return @($items)
-}
-
-function Read-Config {
-    param([string] $Content)
-
-    $values = @{}
-    $lists = @{}
-    $tasks = @{}
-    $section = ''
-    $taskName = ''
-    $activeList = ''
-
-    foreach ($rawLine in ($Content -split '\r?\n')) {
-        $line = $rawLine.TrimEnd("`r")
-        if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) {
-            continue
-        }
-
-        if ($line -match '^(?<indent>[ ]*)(?<key>[A-Za-z0-9_]+):[ \t]*(?<value>.*)$') {
-            $indent = $Matches.indent.Length
-            $key = $Matches.key
-            $value = $Matches.value.Trim()
-            $activeList = ''
-
-            if ($indent -eq 0) {
-                $section = $key
-                $taskName = ''
-                if ($value) {
-                    $values[$key] = if ($value.StartsWith('[')) { ConvertFrom-InlineList $value } else { ConvertFrom-ConfigScalar $value }
-                }
-                continue
-            }
-
-            if ($section -eq 'tasks' -and $indent -eq 2) {
-                $taskName = $key
-                $tasks[$taskName] = @{}
-                continue
-            }
-
-            if ($section -eq 'tasks' -and $indent -ge 4 -and $taskName) {
-                if ($key -eq 'args') {
-                    $tasks[$taskName][$key] = ConvertFrom-InlineList $value
-                }
-                elseif ($value) {
-                    $tasks[$taskName][$key] = ConvertFrom-ConfigScalar $value
-                }
-                else {
-                    $tasks[$taskName][$key] = ''
-                }
-                continue
-            }
-
-            $path = "$section.$key"
-            if ($value.StartsWith('[')) {
-                $lists[$path] = ConvertFrom-InlineList $value
-            }
-            elseif ($value) {
-                $values[$path] = ConvertFrom-ConfigScalar $value
-            }
-            else {
-                $values[$path] = ''
-                $activeList = $path
-            }
-            continue
-        }
-
-        if ($activeList -and $line -match '^\s*-\s*(?<item>.*)$') {
-            if (-not $lists.ContainsKey($activeList)) { $lists[$activeList] = @() }
-            $lists[$activeList] = @($lists[$activeList] + (ConvertFrom-ConfigScalar $Matches.item))
-            continue
-        }
-
-        throw "Unsupported YAML line: $line"
-    }
-
-    return [pscustomobject]@{
-        Values = $values
-        Lists  = $lists
-        Tasks  = $tasks
-    }
-}
 
 function Get-ConfigValue {
     param(
@@ -283,7 +175,7 @@ if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
 
 try {
     $content = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $ConfigPath).Path)
-    $config = Read-Config -Content $content
+    $config = Read-CanonicalContract -Path $ConfigPath -Contract 'sdlc-config'
 }
 catch {
     Write-Host "[FAIL] Could not parse $ConfigPath`: $($_.Exception.Message)"

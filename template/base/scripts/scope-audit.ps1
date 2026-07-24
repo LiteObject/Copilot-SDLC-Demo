@@ -37,6 +37,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'feature-context.ps1')
+. (Join-Path $PSScriptRoot 'contract-parser.ps1')
 
 if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -47,66 +48,16 @@ $FeatureId = $workflowContext.FeatureId
 $SpecPath = $workflowContext.SpecPath
 $SpecRelativePath = $workflowContext.SpecRelativePath
 
-function ConvertFrom-YamlScalar {
-    param([string] $Value)
-
-    $trimmed = $Value.Trim()
-    if (($trimmed.StartsWith('"') -and $trimmed.EndsWith('"')) -or
-        ($trimmed.StartsWith("'") -and $trimmed.EndsWith("'"))) {
-        return $trimmed.Substring(1, $trimmed.Length - 2).Replace('\"', '"')
-    }
-    return $trimmed
-}
-
 function Read-ScopeMetadata {
-    param([string] $Content)
-
-    $frontMatterMatch = [regex]::Match(
-        $Content,
-        '\A---\r?\n(?<frontmatter>.*?)\r?\n---(?:\r?\n|\z)',
-        [System.Text.RegularExpressions.RegexOptions]::Singleline
-    )
-    if (-not $frontMatterMatch.Success) {
-        throw "docs/spec.md must start with YAML front matter delimited by '---'."
-    }
-
+    param([string] $Path)
+    $parsed = Read-CanonicalContract -Path $Path -Contract 'spec-front-matter'
     $values = @{}
-    $plannedFiles = New-Object System.Collections.Generic.List[string]
-    $approvedGlobs = New-Object System.Collections.Generic.List[string]
-    $approvedSharedFiles = New-Object System.Collections.Generic.List[string]
-    $activeList = $null
-    foreach ($line in ($frontMatterMatch.Groups['frontmatter'].Value -split '\r?\n')) {
-        if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) {
-            continue
-        }
-        if ($line -match '^(?<key>[A-Za-z0-9_]+):[ \t]*(?<value>.*)$') {
-            $key = $Matches.key
-            $value = ConvertFrom-YamlScalar $Matches.value
-            $values[$key] = $value
-            $activeList = $null
-            if ($key -in @('planned_files', 'approved_globs', 'approved_shared_files') -and $value -eq '') {
-                $activeList = $key
-            }
-            elseif ($key -in @('planned_files', 'approved_globs', 'approved_shared_files') -and $value -ne '[]') {
-                throw "Metadata list '$key' must use [] or an indented YAML list."
-            }
-            continue
-        }
-        if ($null -ne $activeList -and $line -match '^\s*-\s*(?<item>.*)$') {
-            $item = ConvertFrom-YamlScalar $Matches.item
-            if ($activeList -eq 'planned_files') { [void]$plannedFiles.Add($item) }
-            elseif ($activeList -eq 'approved_globs') { [void]$approvedGlobs.Add($item) }
-            else { [void]$approvedSharedFiles.Add($item) }
-            continue
-        }
-        throw "Unsupported YAML front matter line: $line"
-    }
-
+    foreach ($property in @($parsed.Values.GetEnumerator())) { $values[$property.Key] = [string]$property.Value }
     return [pscustomobject]@{
         Values        = $values
-        PlannedFiles  = @($plannedFiles)
-        ApprovedGlobs = @($approvedGlobs)
-        ApprovedSharedFiles = @($approvedSharedFiles)
+        PlannedFiles  = if ($parsed.Lists.ContainsKey('planned_files')) { @($parsed.Lists['planned_files']) } else { @() }
+        ApprovedGlobs = if ($parsed.Lists.ContainsKey('approved_globs')) { @($parsed.Lists['approved_globs']) } else { @() }
+        ApprovedSharedFiles = if ($parsed.Lists.ContainsKey('approved_shared_files')) { @($parsed.Lists['approved_shared_files']) } else { @() }
     }
 }
 
@@ -207,7 +158,7 @@ function Get-FeaturePlanConflicts {
     foreach ($otherSpec in @(Get-ChildItem -LiteralPath $featuresRoot -Recurse -File -Filter 'spec.md')) {
         $otherRelativePath = Get-FeatureRepoRelativePath -Root $Root -Path $otherSpec.FullName
         if ($otherRelativePath -eq $CurrentSpecRelativePath) { continue }
-        try { $otherMetadata = Read-ScopeMetadata -Content (Get-Content -LiteralPath $otherSpec.FullName -Raw) }
+        try { $otherMetadata = Read-ScopeMetadata -Path $otherSpec.FullName }
         catch { continue }
         $otherFeatureId = if ($otherMetadata.Values.ContainsKey('feature_id')) { [string]$otherMetadata.Values['feature_id'] } else { '' }
         if (-not $otherFeatureId -or $otherFeatureId -eq $CurrentFeatureId) { continue }
@@ -283,9 +234,8 @@ if (-not (Test-Path -LiteralPath $SpecPath -PathType Leaf)) {
     exit 2
 }
 
-$content = Get-Content -LiteralPath $SpecPath -Raw
 try {
-    $metadata = Read-ScopeMetadata -Content $content
+    $metadata = Read-ScopeMetadata -Path $SpecPath
 }
 catch {
     Write-Host "[ERROR] $($_.Exception.Message)"
@@ -307,10 +257,6 @@ if ($FeatureId) {
 
 if (-not $metadata.Values.ContainsKey('sdlc_schema') -or $metadata.Values['sdlc_schema'] -ne '1') {
     Write-Host "[ERROR] Unsupported or missing sdlc_schema. Expected '1'."
-    exit 2
-}
-if (-not $metadata.Values.ContainsKey('planned_files') -or -not $metadata.Values.ContainsKey('approved_globs')) {
-    Write-Host '[ERROR] planned_files and approved_globs are required in the workflow metadata.'
     exit 2
 }
 
@@ -526,3 +472,10 @@ Write-Host ($summary | ConvertTo-Json -Compress)
 if ($invalidPlan.Count -gt 0 -or $unapprovedGlobs.Count -gt 0 -or $invalidSharedFiles.Count -gt 0 -or $featureConflicts.Count -gt 0) { exit 2 }
 if ($scopeCreep.Count -gt 0 -or $missingFiles.Count -gt 0) { exit 1 }
 exit 0
+
+
+
+
+
+
+

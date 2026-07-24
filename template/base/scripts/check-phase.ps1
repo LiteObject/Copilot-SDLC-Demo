@@ -45,6 +45,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'feature-context.ps1')
+. (Join-Path $PSScriptRoot 'contract-parser.ps1')
 
 $validStates = @('GATHERING_REQS', 'DESIGN', 'PLANNING', 'CODING', 'REVIEW', 'TESTING', 'DEPLOYMENT_READINESS', 'DONE')
 $phaseOrder = @{
@@ -68,68 +69,17 @@ $SpecPath = $workflowContext.SpecPath
 $script:FeatureId = $FeatureId
 $script:SpecRelativePath = $workflowContext.SpecRelativePath
 
-function ConvertFrom-YamlScalar {
-    param([string] $Value)
-
-    $trimmed = $Value.Trim()
-    if (($trimmed.StartsWith('"') -and $trimmed.EndsWith('"')) -or
-        ($trimmed.StartsWith("'") -and $trimmed.EndsWith("'"))) {
-        return $trimmed.Substring(1, $trimmed.Length - 2).Replace('\"', '"')
-    }
-    return $trimmed
-}
-
 function Read-WorkflowMetadata {
-    param([string] $Content)
-
-    $frontMatterMatch = [regex]::Match(
-        $Content,
-        '\A---\r?\n(?<frontmatter>.*?)\r?\n---(?:\r?\n|\z)',
-        [System.Text.RegularExpressions.RegexOptions]::Singleline
-    )
-    if (-not $frontMatterMatch.Success) {
-        throw "docs/spec.md must start with YAML front matter delimited by '---'."
-    }
-
+    param([string] $Path)
+    $parsed = Read-CanonicalContract -Path $Path -Contract 'spec-front-matter'
     $values = @{}
-    $lists = @{
-        planned_files          = @()
-        approved_globs         = @()
-        approved_shared_files  = @()
+    foreach ($property in @($parsed.Values.GetEnumerator())) {
+        $values[$property.Key] = [string]$property.Value
     }
-    $activeList = $null
-
-    foreach ($line in ($frontMatterMatch.Groups['frontmatter'].Value -split '\r?\n')) {
-        if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) {
-            continue
-        }
-
-        if ($line -match '^(?<key>[A-Za-z0-9_]+):[ \t]*(?<value>.*)$') {
-            $key = $Matches.key
-            $value = ConvertFrom-YamlScalar $Matches.value
-            $values[$key] = $value
-            $activeList = $null
-            if ($key -in @('planned_files', 'approved_globs', 'approved_shared_files')) {
-                if ($value -eq '[]') {
-                    $lists[$key] = @()
-                }
-                elseif ($value -eq '') {
-                    $lists[$key] = @()
-                    $activeList = $key
-                }
-            }
-            continue
-        }
-
-        if ($null -ne $activeList -and $line -match '^\s*-\s*(?<item>.*)$') {
-            $item = ConvertFrom-YamlScalar $Matches.item
-            $lists[$activeList] = @($lists[$activeList] + $item)
-            continue
-        }
-
-        throw "Unsupported YAML front matter line: $line"
+    $lists = @{}
+    foreach ($property in @($parsed.Lists.GetEnumerator())) {
+        $lists[$property.Key] = @($property.Value)
     }
-
     return [pscustomobject]@{
         Values = $values
         Lists  = $lists
@@ -146,6 +96,19 @@ function Get-MetadataValue {
         return [string]$Metadata[$Name]
     }
     return $null
+}
+
+function Get-ConfigValue {
+    param([psobject] $Config, [string] $Key, [string] $Default = '')
+    if ($Config.Values.ContainsKey($Key)) { return [string]$Config.Values[$Key] }
+    return $Default
+}
+
+function Get-ConfigList {
+    param([psobject] $Config, [string] $Key)
+    if ($Config.Lists.ContainsKey($Key)) { return @($Config.Lists[$Key]) }
+    if ($Config.Values.ContainsKey($Key) -and $Config.Values[$Key] -is [array]) { return @($Config.Values[$Key]) }
+    return @()
 }
 
 function ConvertTo-BooleanValue {
@@ -311,25 +274,32 @@ function Test-GateRecord {
     return $valid
 }
 
+function Get-CanonicalConfig {
+    param([string] $Root)
+
+    if ($null -ne $script:CanonicalConfig) { return $script:CanonicalConfig }
+    $configPath = Join-Path $Root '.github/sdlc-config.yml'
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return $null }
+    try {
+        $script:CanonicalConfig = Read-CanonicalContract -Path $configPath -Contract 'sdlc-config'
+        return $script:CanonicalConfig
+    }
+    catch {
+        $script:CanonicalConfigError = $_.Exception.Message
+        Write-Host "[FAIL] Could not parse $configPath`: $($script:CanonicalConfigError)"
+        return $null
+    }
+}
+
 function Get-ValidationContract {
     param([string] $Root)
 
-    $configPath = Join-Path $Root '.github/sdlc-config.yml'
-    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return $null }
-    $content = Get-Content -LiteralPath $configPath -Raw
-    if ($content -notmatch '(?m)^\s*sdlc_config_schema:\s*1\s*$') { return $null }
-    $required = New-Object System.Collections.Generic.List[string]
-    $requiredMatch = [regex]::Match($content, '(?m)^\s*required_tasks:\s*\[(?<items>[^\]]*)\]')
-    if ($requiredMatch.Success) {
-        foreach ($item in ($requiredMatch.Groups['items'].Value -split ',')) {
-            $task = $item.Trim().Trim('"', "'")
-            if ($task) { [void]$required.Add($task) }
-        }
+    $config = Get-CanonicalConfig -Root $Root
+    if ($null -eq $config -or (Get-ConfigValue $config 'sdlc_config_schema') -ne '1') { return $null }
+    return [pscustomobject]@{
+        Required = @(Get-ConfigList $config 'validation.required_tasks')
+        Install = Get-ConfigValue $config 'validation.install_task' 'none'
     }
-    $install = 'none'
-    $installMatch = [regex]::Match($content, '(?m)^\s*install_task:\s*(?<value>[^\r\n#]+)')
-    if ($installMatch.Success) { $install = $installMatch.Groups['value'].Value.Trim().Trim('"', "'") }
-    return [pscustomobject]@{ Required = @($required); Install = $install }
 }
 
 function Test-ConfiguredTaskGates {
@@ -362,61 +332,22 @@ function Test-ConfiguredTaskGates {
 
 function Get-ConfigSectionValue {
     param([string] $Root, [string] $Section, [string] $Key)
-    $configPath = Join-Path $Root '.github/sdlc-config.yml'
-    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return '' }
-    $inside = $false
-    foreach ($rawLine in (Get-Content -LiteralPath $configPath)) {
-        $line = [string]$rawLine
-        if ($line -match ('^' + [regex]::Escape($Section) + ':\s*$')) { $inside = $true; continue }
-        if ($inside -and $line -match '^[^\s#]') { break }
-        if ($inside -and $line -match ('^\s+' + [regex]::Escape($Key) + ':\s*(?<value>.*)$')) {
-            $value = $Matches.value -replace '\s+#.*$', ''
-            return $value.Trim().Trim('"', "'")
-        }
-    }
-    return ''
+    $config = Get-CanonicalConfig -Root $Root
+    if ($null -eq $config) { return '' }
+    return Get-ConfigValue $config "$Section.$Key"
 }
 
 function Get-ConfigSectionList {
     param([string] $Root, [string] $Section, [string] $Key)
-    $configPath = Join-Path $Root '.github/sdlc-config.yml'
-    $items = New-Object System.Collections.Generic.List[string]
-    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return @() }
-    $inside = $false
-    $active = $false
-    foreach ($rawLine in (Get-Content -LiteralPath $configPath)) {
-        $line = [string]$rawLine
-        if ($line -match ('^' + [regex]::Escape($Section) + ':\s*$')) { $inside = $true; continue }
-        if ($inside -and $line -match '^[^\s#]') { break }
-        if ($inside -and $line -match ('^\s+' + [regex]::Escape($Key) + ':\s*(?<value>.*)$')) {
-            $value = ($Matches.value -replace '\s+#.*$', '').Trim()
-            if ($value.StartsWith('[') -and $value.EndsWith(']')) {
-                $inner = $value.Substring(1, $value.Length - 2)
-                foreach ($item in ($inner -split ',')) {
-                    $clean = $item.Trim().Trim('"', "'")
-                    if ($clean) { [void]$items.Add($clean) }
-                }
-                $active = $false
-            }
-            else { $active = $true }
-            continue
-        }
-        if ($inside -and $active -and $line -match '^\s+-\s*(?<item>.*)$') {
-            $clean = ($Matches.item -replace '\s+#.*$', '').Trim().Trim('"', "'")
-            if ($clean) { [void]$items.Add($clean) }
-            continue
-        }
-        if ($active -and $line -notmatch '^\s*$') { $active = $false }
-    }
-    return @($items)
+    $config = Get-CanonicalConfig -Root $Root
+    if ($null -eq $config) { return @() }
+    return @(Get-ConfigList $config "$Section.$Key")
 }
 
 function Get-VerificationContract {
     param([string] $Root)
-    $configPath = Join-Path $Root '.github/sdlc-config.yml'
-    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return $null }
-    $content = Get-Content -LiteralPath $configPath -Raw
-    if ($content -notmatch '(?m)^verification:\s*$') { return $null }
+    $config = Get-CanonicalConfig -Root $Root
+    if ($null -eq $config -or -not ($config.Document.PSObject.Properties.Name -contains 'verification')) { return $null }
     return [pscustomobject]@{
         RiskProfile = Get-ConfigSectionValue -Root $Root -Section 'quality_security' -Key 'risk_profile'
         CoverageEnabled = Get-ConfigSectionValue -Root $Root -Section 'verification' -Key 'coverage_enabled'
@@ -530,18 +461,14 @@ function Get-SectionBody {
 
 function Test-Phase2Config {
     param([string] $Root)
-    $configPath = Join-Path $Root '.github/sdlc-config.yml'
-    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return $false }
-    $config = Get-Content -LiteralPath $configPath -Raw
-    return $config -match '(?m)^quality_security:\s*$'
+    $config = Get-CanonicalConfig -Root $Root
+    return $null -ne $config -and ($config.Document.PSObject.Properties.Name -contains 'quality_security')
 }
 
     function Test-ReleaseAssuranceEnabled {
         param([string] $Root)
-        $configPath = Join-Path $Root '.github/sdlc-config.yml'
-        if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return $false }
-        $config = Get-Content -LiteralPath $configPath -Raw
-        return $config -match '(?ms)^release_assurance:\s*\r?\n(?:(?!^\S).)*?^\s*enabled:\s*true\s*$'
+        $config = Get-CanonicalConfig -Root $Root
+        return $null -ne $config -and (Get-ConfigValue $config 'release_assurance.enabled') -eq 'true'
     }
 
 function Test-ConfigFlag {
@@ -551,11 +478,8 @@ function Test-ConfigFlag {
         [string] $Field
     )
 
-    $configPath = Join-Path $Root '.github/sdlc-config.yml'
-    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return $false }
-    $config = Get-Content -LiteralPath $configPath -Raw
-    $pattern = '(?ms)^' + [regex]::Escape($Section) + ':\s*\r?\n(?:(?!^\S).)*?^\s*' + [regex]::Escape($Field) + ':\s*true\s*$'
-    return $config -match $pattern
+    $config = Get-CanonicalConfig -Root $Root
+    return $null -ne $config -and (Get-ConfigValue $config "$Section.$Field") -eq 'true'
 }
 
 function Test-RequiredSections {
@@ -641,14 +565,14 @@ if (-not (Test-Path -LiteralPath $SpecPath -PathType Leaf)) {
 
 $content = Get-Content -LiteralPath $SpecPath -Raw
 try {
-    $metadata = Read-WorkflowMetadata -Content $content
+    $metadata = Read-WorkflowMetadata -Path $SpecPath
     $requiredKeys = @(
         'sdlc_schema', 'current_phase', 'design_required',
         'deployment_readiness_enabled', 'security_gate_enabled', 'review_cycle',
         'last_transition_to', 'planned_files', 'approved_globs'
     )
     foreach ($key in $requiredKeys) {
-        if (-not $metadata.Values.ContainsKey($key)) {
+        if (-not $metadata.Values.ContainsKey($key) -and -not $metadata.Lists.ContainsKey($key)) {
             throw "Required workflow metadata '$key' is missing."
         }
     }
@@ -656,6 +580,12 @@ try {
 catch {
     Write-Host "[FAIL] $($_.Exception.Message)"
     exit 1
+}
+
+$canonicalConfigPath = Join-Path $RepoRoot '.github/sdlc-config.yml'
+if (Test-Path -LiteralPath $canonicalConfigPath -PathType Leaf) {
+    $null = Get-CanonicalConfig -Root $RepoRoot
+    if ($script:CanonicalConfigError) { exit 1 }
 }
 
 if ($FeatureId) {

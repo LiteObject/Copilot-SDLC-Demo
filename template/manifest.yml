@@ -25,6 +25,10 @@ base:
     - scripts/generate-agent-surfaces.ps1
     - scripts/generate-agent-surfaces.sh
     - scripts/task-graph.py
+    - scripts/contract_parser.py
+    - scripts/contract-parser.ps1
+    - scripts/contract-parser.sh
+    - scripts/requirements.txt
     - scripts/verification.py
     - scripts/migrate-spec.ps1
     - scripts/migrate-spec.sh
@@ -107,6 +111,10 @@ ownership:
     - scripts/generate-agent-surfaces.ps1
     - scripts/generate-agent-surfaces.sh
     - scripts/task-graph.py
+    - scripts/contract_parser.py
+    - scripts/contract-parser.ps1
+    - scripts/contract-parser.sh
+    - scripts/requirements.txt
     - scripts/verification.py
     - scripts/validate-agent-surfaces.ps1
     - scripts/validate-agent-surfaces.sh

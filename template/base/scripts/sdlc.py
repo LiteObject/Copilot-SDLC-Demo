@@ -19,6 +19,9 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from contract_parser import parser_dependency_status, parse_contract
+
 CLI_VERSION = "1.0.0"
 STATE_RELATIVE = ".sdlc/sdlc-installer-state.json"
 PROJECT_OWNED = {".github/sdlc-config.yml", "docs/spec.md"}
@@ -96,89 +99,22 @@ def json_write(path: Path, value: Any) -> None:
     temporary.replace(path)
 
 
-def parse_scalar(value: str) -> Any:
-    value = value.strip()
-    if not value:
-        return ""
-    if value.startswith("[") and value.endswith("]"):
-        body = value[1:-1].strip()
-        if not body:
-            return []
-        return [parse_scalar(item) for item in body.split(",") if item.strip()]
-    if (value.startswith('"') and value.endswith('"')) or (
-        value.startswith("'") and value.endswith("'")
-    ):
-        return value[1:-1]
-    if value.lower() == "true":
-        return True
-    if value.lower() == "false":
-        return False
-    return value
-
-
 def read_manifest(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise SdlcError(f"Template manifest not found: {path}")
-
-    manifest: dict[str, Any] = {"base_installs": [], "extensions": {}}
-    lines = path.read_text(encoding="utf-8").replace("\r", "").splitlines()
-    section = ""
-    current_extension: str | None = None
-    collecting_base = False
-    base_indent = -1
-    for raw in lines:
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        trimmed = raw.strip()
-        if indent == 0:
-            collecting_base = False
-            current_extension = None
-            if trimmed == "template:":
-                section = "template"
-            elif trimmed == "base:":
-                section = "base"
-            elif trimmed == "extensions:":
-                section = "extensions"
-            else:
-                section = ""
-            continue
-        if section == "template" and indent == 2 and trimmed.startswith("version:"):
-            manifest["version"] = str(parse_scalar(trimmed.split(":", 1)[1]))
-            continue
-        if section == "template" and indent == 2 and trimmed.startswith("name:"):
-            manifest["name"] = str(parse_scalar(trimmed.split(":", 1)[1]))
-            continue
-        if (
-            section == "template"
-            and indent == 2
-            and trimmed.startswith("supported_installers:")
-        ):
-            manifest["supported_installers"] = parse_scalar(trimmed.split(":", 1)[1])
-            continue
-        if section == "base":
-            if indent == 2 and trimmed == "installs:":
-                collecting_base = True
-                base_indent = indent
-                continue
-            if collecting_base:
-                if indent > base_indent and trimmed.startswith("-"):
-                    manifest["base_installs"].append(
-                        str(parse_scalar(trimmed[1:].strip()))
-                    )
-                    continue
-                collecting_base = False
-        if section == "extensions":
-            if indent == 2 and trimmed.endswith(":"):
-                current_extension = trimmed[:-1]
-                manifest["extensions"][current_extension] = {}
-                continue
-            if current_extension and indent >= 4 and ":" in trimmed:
-                key, value = trimmed.split(":", 1)
-                manifest["extensions"][current_extension][key.strip()] = parse_scalar(
-                    value
-                )
-
+    try:
+        document = parse_contract(path, "template-manifest")["document"]
+    except Exception as exc:
+        raise SdlcError(f"Could not parse template manifest '{path}': {exc}") from exc
+    template = document.get("template", {})
+    base = document.get("base", {})
+    manifest: dict[str, Any] = {
+        "name": str(template.get("name", "")),
+        "version": str(template.get("version", "")),
+        "supported_installers": template.get("supported_installers", []),
+        "base_installs": [str(item) for item in base.get("installs", [])],
+        "extensions": document.get("extensions", {}),
+    }
     if not manifest.get("version"):
         raise SdlcError(f"Template version is missing from {path}")
     if not manifest.get("base_installs"):
@@ -1094,6 +1030,14 @@ def check_runtime(shell: str) -> dict[str, Any]:
             "name": "python",
             "result": "PASS" if python_ok else "FAIL",
             "detail": platform.python_version(),
+        }
+    )
+    parser_status = parser_dependency_status()
+    checks.append(
+        {
+            "name": "contract-parser",
+            "result": parser_status["result"],
+            "detail": parser_status["detail"],
         }
     )
     if shell == "bash":

@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from contract_parser import ContractParserError, parse_contract
+
 FEATURE_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 TASK_ID_PATTERN = re.compile(r"^[A-Z][A-Z0-9._-]*$")
 REFERENCE_PATTERNS = {
@@ -131,33 +133,17 @@ def current_tree_digest(root: Path, spec_relative_path: str) -> str:
 
 def load_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return parse_contract(path, "task-graph")["document"]
     except FileNotFoundError as error:
         raise ValueError(f"JSON file not found: {path}") from error
-    except json.JSONDecodeError as error:
+    except (ContractParserError, OSError) as error:
         raise ValueError(f"invalid JSON in {path}: {error}") from error
 
 
 def read_config_task_ids(path: Path) -> set[str]:
     if not path.is_file():
         raise ValueError(f"Configuration file not found: {path}")
-    task_ids: set[str] = set()
-    in_tasks = False
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.rstrip("\r")
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if len(line) == len(line.lstrip()) and stripped == "tasks:":
-            in_tasks = True
-            continue
-        if in_tasks and len(line) == len(line.lstrip()):
-            in_tasks = False
-        if in_tasks:
-            match = re.match(r"^  ([A-Za-z0-9_]+):\s*$", line)
-            if match:
-                task_ids.add(match.group(1))
-    return task_ids
+    return set(parse_contract(path, "sdlc-config")["tasks"])
 
 
 def section_lines(spec_path: Path, heading: str) -> list[str]:
@@ -196,29 +182,13 @@ def spec_references(spec_path: Path) -> tuple[set[str], set[str]]:
 def front_matter_list(spec_path: Path, key: str) -> list[str]:
     if not spec_path.is_file():
         return []
-    lines = spec_path.read_text(encoding="utf-8").splitlines()
-    inside = False
-    active = False
-    values: list[str] = []
-    for raw_line in lines:
-        line = raw_line.rstrip("\r")
-        if line == "---" and not inside:
-            inside = True
-            continue
-        if line == "---" and inside:
-            break
-        if not inside:
-            continue
-        if re.match(rf"^{re.escape(key)}:\s*$", line):
-            active = True
-            continue
-        if re.match(r"^[A-Za-z0-9_]+:", line):
-            active = False
-        if active:
-            match = re.match(r"^\s*-\s*(.+)$", line)
-            if match:
-                values.append(match.group(1).strip().strip("\"'"))
-    return values
+    try:
+        values = parse_contract(spec_path, "spec-front-matter")["lists"].get(key, [])
+        return [str(value) for value in values]
+    except ContractParserError as error:
+        raise ValueError(
+            f"invalid spec front matter in {spec_path}: {error}"
+        ) from error
 
 
 def resolve_context(arguments: argparse.Namespace) -> tuple[Path, str, str]:

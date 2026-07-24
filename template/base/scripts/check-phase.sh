@@ -11,6 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/feature-context.sh"
+. "$SCRIPT_DIR/contract-parser.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SPEC_PATH=""
 FEATURE_ID=""
@@ -82,75 +83,42 @@ fi
 
 CONTENT="$(tr -d '\r' < "$SPEC_PATH")"
 
-if ! FRONT_MATTER="$(printf '%s\n' "$CONTENT" | awk '
-    NR == 1 && $0 == "---" { inside = 1; next }
-    inside && $0 == "---" { found = 1; exit }
-    inside { print }
-    END { if (!found) exit 2 }
-')"; then
-    echo "[FAIL] docs/spec.md must start with YAML front matter delimited by '---'."
+if ! read_canonical_contract "$SPEC_PATH" spec-front-matter; then
     exit 1
 fi
+trap cleanup_canonical_contract EXIT
 
 declare -A META=()
 declare -a PLANNED_FILES=()
 declare -a APPROVED_GLOBS=()
 declare -a APPROVED_SHARED_FILES=()
-ACTIVE_LIST=""
 
-trim_value() {
-    local value="$1"
-    value="${value#"${value%%[![:space:]]*}"}"
-    value="${value%"${value##*[![:space:]]}"}"
-    printf '%s' "$value"
-}
-
-unquote_value() {
-    local value
-    value="$(trim_value "$1")"
-    if [[ ${#value} -ge 2 && "${value:0:1}" == '"' && "${value: -1}" == '"' ]]; then
-        value="${value:1:${#value}-2}"
-        value="${value//\\\"/\"}"
-    elif [[ ${#value} -ge 2 && "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
-        value="${value:1:${#value}-2}"
-    fi
-    printf '%s' "$value"
-}
-
-while IFS= read -r line; do
-    [[ -z "$(trim_value "$line")" ]] && continue
-    [[ "$(trim_value "$line")" == \#* ]] && continue
-
-    if [[ "$line" =~ ^([A-Za-z0-9_]+):[[:space:]]*(.*)$ ]]; then
-        key="${BASH_REMATCH[1]}"
-        value="$(unquote_value "${BASH_REMATCH[2]}")"
+while IFS= read -r -d '' key; do
+    if value="$(canonical_contract_query "$key" scalar 2>/dev/null)"; then
         META["$key"]="$value"
-        ACTIVE_LIST=""
-        if [[ "$key" == 'planned_files' || "$key" == 'approved_globs' || "$key" == 'approved_shared_files' ]]; then
-            if [[ "$value" == '[]' ]]; then
-                :
-            elif [[ -z "$value" ]]; then
-                ACTIVE_LIST="$key"
-            else
-                echo "[FAIL] Metadata list '$key' must use [] or an indented YAML list."
-                exit 1
-            fi
-        fi
-    elif [[ -n "$ACTIVE_LIST" && "$line" =~ ^[[:space:]]*-[[:space:]]*(.*)$ ]]; then
-        item="$(unquote_value "${BASH_REMATCH[1]}")"
-        if [[ "$ACTIVE_LIST" == 'planned_files' ]]; then
-            PLANNED_FILES+=("$item")
-        else
-            APPROVED_GLOBS+=("$item")
-        fi
     else
-        echo "[FAIL] Unsupported YAML front matter line: $line"
-        exit 1
+        META["$key"]=''  # placeholder so meta_has succeeds for list/empty keys
     fi
-done <<< "$FRONT_MATTER"
+done < <(canonical_contract_query '' keys-nul 2>/dev/null || true)
+
+while IFS= read -r -d '' item; do PLANNED_FILES+=("$item"); done < <(canonical_contract_query planned_files nul 2>/dev/null || true)
+while IFS= read -r -d '' item; do APPROVED_GLOBS+=("$item"); done < <(canonical_contract_query approved_globs nul 2>/dev/null || true)
+while IFS= read -r -d '' item; do APPROVED_SHARED_FILES+=("$item"); done < <(canonical_contract_query approved_shared_files nul 2>/dev/null || true)
+
+cleanup_canonical_contract
+CONFIG_PATH="$REPO_ROOT/.github/sdlc-config.yml"
+CONFIG_LOADED=0
+if [[ -f "$CONFIG_PATH" ]]; then
+    read_canonical_contract "$CONFIG_PATH" sdlc-config || exit 1
+    CONFIG_LOADED=1
+fi
 
 meta_get() {
     printf '%s' "${META[$1]-}"
+}
+
+meta_has() {
+    [[ -n "${META[$1]+present}" ]]
 }
 
 if [[ -n "$FEATURE_ID" ]]; then
@@ -176,7 +144,10 @@ require_metadata_key() {
 }
 
 for key in sdlc_schema current_phase design_required deployment_readiness_enabled security_gate_enabled review_cycle last_transition_to planned_files approved_globs; do
-    require_metadata_key "$key"
+    if ! meta_has "$key"; then
+        echo "[FAIL] Required workflow metadata '$key' is missing."
+        exit 1
+    fi
 done
 
 if [[ "$(meta_get sdlc_schema)" != '1' ]]; then
@@ -242,19 +213,24 @@ DEPLOYMENT_READINESS_ENABLED="$(meta_get deployment_readiness_enabled)"
 SECURITY_GATE_ENABLED="$(meta_get security_gate_enabled)"
 
 release_assurance_enabled() {
-    [[ -f "$REPO_ROOT/.github/sdlc-config.yml" ]] || return 1
-    awk '/^release_assurance:[[:space:]]*$/{found=1; next} found && /^[^[:space:]]/{exit} found && /^[[:space:]]+enabled:[[:space:]]*true[[:space:]]*$/{enabled=1} END { exit(enabled ? 0 : 1) }' "$REPO_ROOT/.github/sdlc-config.yml"
+    (( CONFIG_LOADED == 1 )) || return 1
+    [[ "$(config_value release_assurance.enabled)" == true ]]
 }
 
 config_flag_enabled() {
     local section="$1" field="$2"
-    [[ -f "$REPO_ROOT/.github/sdlc-config.yml" ]] || return 1
-    awk -v section="$section" -v field="$field" '
-        $0 ~ "^" section ":[[:space:]]*$" { found = 1; next }
-        found && /^[^[:space:]]/ { exit }
-        found && $0 ~ "^[[:space:]]+" field ":[[:space:]]*true[[:space:]]*$" { enabled = 1 }
-        END { exit(enabled ? 0 : 1) }
-    ' "$REPO_ROOT/.github/sdlc-config.yml"
+    (( CONFIG_LOADED == 1 )) || return 1
+    [[ "$(config_value "$section.$field")" == true ]]
+}
+
+config_value() {
+    canonical_contract_query "$1" scalar 2>/dev/null || true
+}
+
+config_list() {
+    local item
+    CONFIG_LIST_RESULT=()
+    while IFS= read -r -d '' item; do CONFIG_LIST_RESULT+=("$item"); done < <(canonical_contract_query "$1" nul 2>/dev/null || true)
 }
 
 AI_GOVERNANCE_ENABLED=0
@@ -476,29 +452,12 @@ test_gate() {
 get_validation_contract() {
     VALIDATION_REQUIRED=()
     VALIDATION_INSTALL='none'
-    local config_path="$REPO_ROOT/.github/sdlc-config.yml" line items item in_validation=0
-    [[ -f "$config_path" ]] || return 1
-    grep -Eq '^sdlc_config_schema:[[:space:]]*1[[:space:]]*$' "$config_path" || return 1
-    while IFS= read -r line; do
-        line="${line%$'\r'}"
-        if [[ "$line" == 'validation:' ]]; then
-            in_validation=1
-            continue
-        fi
-        if (( in_validation == 1 )) && [[ "$line" =~ ^[^[:space:]] ]]; then break; fi
-        if (( in_validation == 1 )) && [[ "$line" =~ ^[[:space:]]+required_tasks:[[:space:]]*\[(.*)\] ]]; then
-            items="${BASH_REMATCH[1]}"
-            IFS=',' read -r -a raw_items <<< "$items"
-            for item in "${raw_items[@]}"; do
-                item="$(trim_value "$item")"
-                item="${item//\"/}"
-                [[ -n "$item" ]] && VALIDATION_REQUIRED+=("$item")
-            done
-        elif (( in_validation == 1 )) && [[ "$line" =~ ^[[:space:]]+install_task:[[:space:]]*(.*)$ ]]; then
-            VALIDATION_INSTALL="$(trim_value "${BASH_REMATCH[1]}")"
-            VALIDATION_INSTALL="${VALIDATION_INSTALL//\"/}"
-        fi
-    done < "$config_path"
+    (( CONFIG_LOADED == 1 )) || return 1
+    [[ "$(config_value sdlc_config_schema)" == 1 ]] || return 1
+    config_list validation.required_tasks
+    VALIDATION_REQUIRED=("${CONFIG_LIST_RESULT[@]}")
+    VALIDATION_INSTALL="$(config_value validation.install_task)"
+    [[ -n "$VALIDATION_INSTALL" ]] || VALIDATION_INSTALL='none'
     return 0
 }
 

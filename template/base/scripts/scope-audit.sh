@@ -16,6 +16,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/feature-context.sh"
+. "$SCRIPT_DIR/contract-parser.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SPEC_PATH=""
 FEATURE_ID=""
@@ -77,21 +78,13 @@ if [[ ! -f "$SPEC_PATH" ]]; then
 fi
 
 CONTENT="$(tr -d '\r' < "$SPEC_PATH")"
-if ! FRONT_MATTER="$(printf '%s\n' "$CONTENT" | awk '
-    NR == 1 && $0 == "---" { inside = 1; next }
-    inside && $0 == "---" { found = 1; exit }
-    inside { print }
-    END { if (!found) exit 2 }
-')"; then
-    echo "[ERROR] docs/spec.md must start with YAML front matter delimited by '---'."
-    exit 2
-fi
+if ! read_canonical_contract "$SPEC_PATH" spec-front-matter; then exit 2; fi
+trap cleanup_canonical_contract EXIT
 
 declare -A META=()
 declare -a PLANNED_FILES=()
 declare -a APPROVED_GLOBS=()
 declare -a APPROVED_SHARED_FILES=()
-ACTIVE_LIST=""
 
 trim_value() {
     local value="$1"
@@ -100,50 +93,12 @@ trim_value() {
     printf '%s' "$value"
 }
 
-unquote_value() {
-    local value
-    value="$(trim_value "$1")"
-    if [[ ${#value} -ge 2 && "${value:0:1}" == '"' && "${value: -1}" == '"' ]]; then
-        value="${value:1:${#value}-2}"
-        value="${value//\\\"/\"}"
-    elif [[ ${#value} -ge 2 && "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
-        value="${value:1:${#value}-2}"
-    fi
-    printf '%s' "$value"
-}
-
-while IFS= read -r line; do
-    [[ -z "$(trim_value "$line")" ]] && continue
-    [[ "$(trim_value "$line")" == \#* ]] && continue
-    if [[ "$line" =~ ^([A-Za-z0-9_]+):[[:space:]]*(.*)$ ]]; then
-        key="${BASH_REMATCH[1]}"
-        value="$(unquote_value "${BASH_REMATCH[2]}")"
-        META["$key"]="$value"
-        ACTIVE_LIST=""
-        if [[ "$key" == 'planned_files' || "$key" == 'approved_globs' || "$key" == 'approved_shared_files' ]]; then
-            if [[ "$value" == '[]' ]]; then
-                :
-            elif [[ -z "$value" ]]; then
-                ACTIVE_LIST="$key"
-            else
-                echo "[ERROR] Metadata list '$key' must use [] or an indented YAML list."
-                exit 2
-            fi
-        fi
-    elif [[ -n "$ACTIVE_LIST" && "$line" =~ ^[[:space:]]*-[[:space:]]*(.*)$ ]]; then
-        item="$(unquote_value "${BASH_REMATCH[1]}")"
-        if [[ "$ACTIVE_LIST" == 'planned_files' ]]; then
-            PLANNED_FILES+=("$item")
-        elif [[ "$ACTIVE_LIST" == 'approved_globs' ]]; then
-            APPROVED_GLOBS+=("$item")
-        else
-            APPROVED_SHARED_FILES+=("$item")
-        fi
-    else
-        echo "[ERROR] Unsupported YAML front matter line: $line"
-        exit 2
-    fi
-done <<< "$FRONT_MATTER"
+while IFS= read -r -d '' key; do
+    if value="$(canonical_contract_query "$key" scalar 2>/dev/null)"; then META["$key"]="$value"; else META["$key"]=''; fi
+done < <(canonical_contract_query '' keys-nul 2>/dev/null || true)
+while IFS= read -r -d '' item; do PLANNED_FILES+=("$item"); done < <(canonical_contract_query planned_files nul 2>/dev/null || true)
+while IFS= read -r -d '' item; do APPROVED_GLOBS+=("$item"); done < <(canonical_contract_query approved_globs nul 2>/dev/null || true)
+while IFS= read -r -d '' item; do APPROVED_SHARED_FILES+=("$item"); done < <(canonical_contract_query approved_shared_files nul 2>/dev/null || true)
 
 meta_get() {
     printf '%s' "${META[$1]-}"
@@ -164,7 +119,7 @@ if [[ -n "$FEATURE_ID" ]]; then
 fi
 
 for key in sdlc_schema planned_files approved_globs; do
-    if [[ -z "${META[$key]+present}" ]]; then
+    if [[ -z "${META[$key]+present}" ]] && ! canonical_contract_query "$key" json >/dev/null 2>&1; then
         echo "[ERROR] Required workflow metadata '$key' is missing."
         exit 2
     fi
@@ -282,7 +237,7 @@ get_feature_plan_conflicts() {
         other_feature="${other_spec#$features_prefix}"
         other_feature="${other_feature%%/*}"
         [[ "$other_feature" != "$FEATURE_ID" ]] || continue
-        while IFS= read -r other_plan; do
+        while IFS= read -r -d '' other_plan; do
             other_plan="$(normalize_path "$other_plan")"
             [[ -n "$other_plan" ]] || continue
             is_glob "$other_plan" && continue
@@ -290,13 +245,11 @@ get_feature_plan_conflicts() {
                 changed_file="$(normalize_path "$changed_file")"
                 [[ "$changed_file" == "$other_plan" ]] && printf '%s\n' "$changed_file (planned by feature '$other_feature')"
             done
-        done < <(tr -d '\r' < "$other_spec" | awk '
-            NR == 1 && $0 == "---" { front = 1; next }
-            front && $0 == "---" { exit }
-            front && $0 ~ /^planned_files:[[:space:]]*$/ { active = 1; next }
-            front && $0 ~ /^[A-Za-z0-9_]+:/ { active = 0 }
-            active && $0 ~ /^[[:space:]]*-[[:space:]]*/ { sub(/^[[:space:]]*-[[:space:]]*/, ""); print }
-        ')
+        done < <(
+            read_canonical_contract "$other_spec" spec-front-matter >/dev/null 2>&1 || exit 0
+            canonical_contract_query planned_files nul 2>/dev/null || true
+            cleanup_canonical_contract
+        )
     done < <(find "$REPO_ROOT/docs/specs" -mindepth 2 -maxdepth 2 -type f -name spec.md -print0 2>/dev/null)
 }
 

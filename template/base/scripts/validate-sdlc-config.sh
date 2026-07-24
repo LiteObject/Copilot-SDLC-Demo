@@ -14,6 +14,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/feature-context.sh"
+. "$SCRIPT_DIR/contract-parser.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_PATH=""
 EVIDENCE_DIRECTORY=""
@@ -94,122 +95,34 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
     exit 1
 fi
 
-trim_value() {
-    local value="$1"
-    value="${value#"${value%%[![:space:]]*}"}"
-    value="${value%"${value##*[![:space:]]}"}"
-    printf '%s' "$value"
-}
-
-unquote_value() {
-    local value
-    value="$(trim_value "$1")"
-    if [[ ${#value} -ge 2 && "${value:0:1}" == '"' && "${value: -1}" == '"' ]]; then
-        value="${value:1:${#value}-2}"
-        value="${value//\\\"/\"}"
-    elif [[ ${#value} -ge 2 && "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
-        value="${value:1:${#value}-2}"
-    else
-        value="$(printf '%s' "$value" | sed -E 's/[[:space:]]+#.*$//')"
-    fi
-    printf '%s' "$value"
-}
-
-serialize_items() {
-    local result='' item
-    for item in "$@"; do
-        [[ -z "$result" ]] && result="$item" || result+=$'\x1f'"$item"
-    done
-    printf '%s' "$result"
-}
-
-parse_inline_list() {
-    local value="$1"
-    local trimmed inner item
-    PARSED_ITEMS=()
-    trimmed="$(trim_value "$value")"
-    if [[ "$trimmed" == '[]' ]]; then
-        return 0
-    fi
-    if [[ "$trimmed" != \[*\] ]]; then
-        echo "[FAIL] Expected an inline YAML list, got '$value'." >&2
-        return 1
-    fi
-    inner="${trimmed:1:${#trimmed}-2}"
-    [[ -z "$(trim_value "$inner")" ]] && return 0
-    IFS=',' read -r -a raw_items <<< "$inner"
-    for item in "${raw_items[@]}"; do
-        item="$(unquote_value "$item")"
-        [[ -n "$item" ]] || { echo "[FAIL] Empty item in YAML list '$value'." >&2; return 1; }
-        PARSED_ITEMS+=("$item")
-    done
-}
-
-while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
-    line="${raw_line%$'\r'}"
-    trimmed="$(trim_value "$line")"
-    [[ -z "$trimmed" || "$trimmed" == \#* ]] && continue
-
-    if [[ "$line" =~ ^([[:space:]]*)([A-Za-z0-9_]+):[[:space:]]*(.*)$ ]]; then
-        indent="${#BASH_REMATCH[1]}"
-        key="${BASH_REMATCH[2]}"
-        value="${BASH_REMATCH[3]}"
-        ACTIVE_LIST=""
-        if (( indent == 0 )); then
-            CURRENT_SECTION="$key"
-            CURRENT_TASK=""
-            if [[ -n "$(trim_value "$value")" ]]; then
-                if [[ "$value" == \[*\] ]]; then
-                    parse_inline_list "$value" || exit 2
-                    LISTS["$key"]="$(serialize_items "${PARSED_ITEMS[@]}")"
-                else
-                    CFG["$key"]="$(unquote_value "$value")"
-                fi
-            fi
-        elif [[ "$CURRENT_SECTION" == 'tasks' && $indent -eq 2 ]]; then
-            CURRENT_TASK="$key"
-        elif [[ "$CURRENT_SECTION" == 'tasks' && $indent -ge 4 && -n "$CURRENT_TASK" ]]; then
-            if [[ "$key" == 'args' ]]; then
-                parse_inline_list "$value" || exit 2
-                TASK_ARGS["$CURRENT_TASK"]="$(serialize_items "${PARSED_ITEMS[@]}")"
-                TASK_ARGS_SET["$CURRENT_TASK"]=1
-            else
-                TASK_EXEC["$CURRENT_TASK"]="$(unquote_value "$value")"
-            fi
-        else
-            path="$CURRENT_SECTION.$key"
-            if [[ "$value" == \[*\] ]]; then
-                parse_inline_list "$value" || exit 2
-                LISTS["$path"]="$(serialize_items "${PARSED_ITEMS[@]}")"
-            elif [[ -n "$(trim_value "$value")" ]]; then
-                CFG["$path"]="$(unquote_value "$value")"
-            else
-                CFG["$path"]=''
-                ACTIVE_LIST="$path"
-            fi
-        fi
-    elif [[ -n "$ACTIVE_LIST" && "$line" =~ ^[[:space:]]*-[[:space:]]*(.*)$ ]]; then
-        item="$(unquote_value "${BASH_REMATCH[1]}")"
-        existing="${LISTS[$ACTIVE_LIST]-}"
-        [[ -z "$existing" ]] && LISTS["$ACTIVE_LIST"]="$item" || LISTS["$ACTIVE_LIST"]+=$'\x1f'"$item"
-    else
-        echo "[FAIL] Unsupported YAML line: $line"
-        exit 2
-    fi
-done < "$CONFIG_PATH"
+read_canonical_contract "$CONFIG_PATH" sdlc-config || exit $?
+trap cleanup_canonical_contract EXIT
 
 get_value() {
-    printf '%s' "${CFG[$1]-${2-}}"
+    local value
+    if value="$(canonical_contract_query "$1" scalar 2>/dev/null)"; then
+        printf '%s' "$value"
+    else
+        printf '%s' "${2-}"
+    fi
 }
 
 get_list() {
     LIST_RESULT=()
-    local serialized="${LISTS[$1]-}" item
-    [[ -n "$serialized" ]] || return 0
-    while IFS= read -r -d $'\x1f' item; do
+    local item
+    while IFS= read -r -d '' item; do
         LIST_RESULT+=("$item")
-    done < <(printf '%s\x1f' "$serialized")
+    done < <(canonical_contract_query "$1" nul 2>/dev/null || true)
 }
+
+while IFS= read -r -d '' task_name; do
+    TASK_EXEC["$task_name"]="$(canonical_contract_query "tasks.$task_name.executable" scalar)"
+    TASK_ARGS["$task_name"]=''
+    TASK_ARGS_SET["$task_name"]=1
+    while IFS= read -r -d '' task_argument; do
+        [[ -z "${TASK_ARGS[$task_name]}" ]] && TASK_ARGS["$task_name"]="$task_argument" || TASK_ARGS["$task_name"]+=$'\x1f'"$task_argument"
+    done < <(canonical_contract_query "tasks.$task_name.args" nul 2>/dev/null || true)
+done < <(canonical_contract_query tasks keys-nul 2>/dev/null || true)
 
 add_error() {
     ERRORS+=("$1")
