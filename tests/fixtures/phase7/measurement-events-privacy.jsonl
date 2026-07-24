@@ -1,0 +1,1 @@
+{"event_id":"privacy-change","event_type":"change","model":"dora-ai-v1","event_time":"2026-07-01T00:00:00Z","repository_id":"fixture-repository","service_id":"checkout","change_id":"privacy-change","first_commit_at":"2026-07-01T00:00:00Z","prompt":"raw prompt must not be retained"}

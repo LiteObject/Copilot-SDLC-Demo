@@ -134,20 +134,22 @@ if [[ -f "$BASE_VALIDATOR" ]]; then
     bash "$BASE_VALIDATOR" --config-path "$CONFIG_PATH" --repo-root "$REPO_ROOT" --evidence-directory "$EVIDENCE_DIRECTORY"
 fi
 
-for field in owner cadence measurement_plan_path baseline_path metric_catalog_path privacy_review_path improvement_log_path quarterly_review_path snapshot_path baseline_task snapshot_task review_task; do
+for field in model cohort change_failure_window_days time_measurement_method owner cadence measurement_plan_path baseline_path metric_catalog_path catalog_path event_schema_path events_path report_path experiment_path privacy_review_path improvement_log_path quarterly_review_path snapshot_path baseline_task snapshot_task review_task; do
     [[ -n "$(get_value "$field")" ]] || add_error "measurement.$field is required."
 done
 CADENCE="$(get_value cadence)"
 [[ "$CADENCE" == monthly || "$CADENCE" == quarterly ]] || add_error 'measurement.cadence must be monthly or quarterly.'
 RETENTION="$(get_value retention_days)"
 [[ "$RETENTION" =~ ^[1-9][0-9]*$ ]] || add_error 'measurement.retention_days must be a positive integer.'
+FAILURE_WINDOW="$(get_value change_failure_window_days)"
+[[ "$FAILURE_WINDOW" =~ ^[1-9][0-9]*$ ]] || add_error 'measurement.change_failure_window_days must be a positive integer.'
 AI_APPLICABLE="$(get_value ai_product_metrics_applicable false)"
 [[ "$AI_APPLICABLE" == true || "$AI_APPLICABLE" == false ]] || add_error 'measurement.ai_product_metrics_applicable must be true or false.'
 REQUIRE_COMPLETION_GATE="$(get_value require_completion_gate false)"
 [[ "$REQUIRE_COMPLETION_GATE" == true || "$REQUIRE_COMPLETION_GATE" == false ]] || add_error 'measurement.require_completion_gate must be true or false.'
 
-check_required_list baseline_metrics lead_time deployment_frequency change_failure_rate recovery_time escaped_defects security_findings review_cycle_count flaky_test_rate rollback_rate
-check_required_list delivery_metrics complete_evidence_rate agent_suggested_defect_rate human_rework review_acceptance_rate scope_drift_rate validation_pass_rate model_tool_policy_violations
+check_required_list baseline_metrics lead_time deployment_frequency change_failure_rate recovery_time escaped_defects security_findings review_cycle_count flaky_test_rate rollback_rate slo_attainment
+check_required_list delivery_metrics complete_evidence_rate agent_suggested_defect_rate human_rework review_acceptance_rate scope_drift_rate validation_pass_rate model_tool_policy_violations time_saved_or_added
 check_required_list phase_outcome_metrics phase0_outcome phase1_outcome phase2_outcome phase3_outcome phase4_outcome phase5_outcome phase6_outcome phase7_outcome
 check_required_list phase_leading_indicators phase0_leading_indicator phase1_leading_indicator phase2_leading_indicator phase3_leading_indicator phase4_leading_indicator phase5_leading_indicator phase6_leading_indicator phase7_leading_indicator
 if [[ "$AI_APPLICABLE" == true ]]; then
@@ -164,13 +166,16 @@ for field in baseline_metrics delivery_metrics ai_product_metrics phase_outcome_
     done
 done
 
-for field in measurement_plan_path baseline_path metric_catalog_path privacy_review_path improvement_log_path quarterly_review_path snapshot_path; do
+for field in measurement_plan_path baseline_path metric_catalog_path catalog_path event_schema_path events_path report_path experiment_path privacy_review_path improvement_log_path quarterly_review_path snapshot_path; do
     path="$(get_value "$field")"
     safe_path "$path" || add_error "measurement.$field must be repository-relative: $path"
 done
 test_document_if_safe measurement_plan_path "$(get_value measurement_plan_path)" Outcome 'leading indicator' cadence owner retention privacy
 test_document_if_safe baseline_path "$(get_value baseline_path)" Baseline Definition Owner Source Retention
 test_document_if_safe metric_catalog_path "$(get_value metric_catalog_path)" 'Metric ID' Definition Owner Source Retention 'Privacy review'
+test_document_if_safe catalog_path "$(get_value catalog_path)" 'sdlc-measurement-catalog' 'dora-ai-v1' metrics
+test_document_if_safe event_schema_path "$(get_value event_schema_path)" 'sdlc-measurement-event-schema' common_required event_types
+test_document_if_safe experiment_path "$(get_value experiment_path)" 'sdlc-measurement-experiments' model experiments
 test_document_if_safe privacy_review_path "$(get_value privacy_review_path)" 'Data minimization' Sensitive 'Personal data' Aggregation Retention Access 'Review outcome'
 test_document_if_safe improvement_log_path "$(get_value improvement_log_path)" 'Observed effect' Regression Owner Evidence Accepted
 test_document_if_safe quarterly_review_path "$(get_value quarterly_review_path)" Period 'Completed improvements' 'Unresolved risks' 'Exception trends' 'Next prioritized roadmap' Regression
@@ -182,11 +187,36 @@ done
 
 RECORD_DIRECTORY="$REPO_ROOT/$EVIDENCE_DIRECTORY"
 mkdir -p "$RECORD_DIRECTORY"
+CANONICAL_VALIDATOR="$SCRIPT_DIR/measurement.py"
+PYTHON_EXECUTABLE=''
+for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then PYTHON_EXECUTABLE="$candidate"; break; fi
+done
+if [[ ! -f "$CANONICAL_VALIDATOR" ]]; then
+    add_error "Canonical measurement validator is missing: $CANONICAL_VALIDATOR"
+elif [[ -z "$PYTHON_EXECUTABLE" ]]; then
+    add_error 'Python 3 is required for the canonical measurement validator.'
+else
+    set +e
+    "$PYTHON_EXECUTABLE" "$CANONICAL_VALIDATOR" validate-contract --config-path "$CONFIG_PATH" --repo-root "$REPO_ROOT" --evidence-path "$RECORD_DIRECTORY/measurement-model-validation.json"
+    CANONICAL_EXIT=$?
+    set -e
+    (( CANONICAL_EXIT == 0 )) || add_error 'Canonical measurement model validation failed.'
+fi
 COMMIT_SHA="$(get_commit_sha)"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if (( ${#ERRORS[@]} == 0 )); then RESULT='PASS'; EXIT_CODE=0; else RESULT='FAIL'; EXIT_CODE=1; fi
 {
-    printf '{"schema":1,"kind":"sdlc-measurement-config-validation","command":"scripts/validate-measurement.sh","commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"timestamp":'; json_escape "$TIMESTAMP"; printf ',"owner":'; json_escape "$(get_value owner)"; printf ',"cadence":'; json_escape "$CADENCE"; printf ',"require_completion_gate":'; json_escape "$REQUIRE_COMPLETION_GATE"; printf ',"exit_code":%d,"result":' "$EXIT_CODE"; json_escape "$RESULT"; printf ',"errors":'; json_array "${ERRORS[@]}"; printf '}\n'
+    printf '{"schema":1,"kind":"sdlc-measurement-config-validation","command":"scripts/validate-measurement.sh","commit_sha":'; json_escape "$COMMIT_SHA"
+    printf ',"timestamp":'; json_escape "$TIMESTAMP"
+    printf ',"model":'; json_escape "$(get_value model)"
+    printf ',"cohort":'; json_escape "$(get_value cohort)"
+    printf ',"change_failure_window_days":'; json_escape "$FAILURE_WINDOW"
+    printf ',"owner":'; json_escape "$(get_value owner)"
+    printf ',"cadence":'; json_escape "$CADENCE"
+    printf ',"require_completion_gate":'; json_escape "$REQUIRE_COMPLETION_GATE"
+    printf ',"exit_code":%d,"result":' "$EXIT_CODE"; json_escape "$RESULT"
+    printf ',"errors":'; json_array "${ERRORS[@]}"; printf '}\n'
 } > "$RECORD_DIRECTORY/measurement-config-validation.json"
 if (( ${#ERRORS[@]} > 0 )); then exit 1; fi
 echo '[PASS] Measurement configuration is valid.'

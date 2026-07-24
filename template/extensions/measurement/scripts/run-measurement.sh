@@ -101,6 +101,9 @@ else
         --repo-root "$REPO_ROOT"
         --owner "$(get_value owner)"
         --retention-days "$(get_value retention_days)"
+        --config-path "$CONFIG_PATH"
+        --catalog-path "$REPO_ROOT/$(get_value catalog_path)"
+        --model "$(get_value model)"
         --validation-evidence-path "$SNAPSHOT_VALIDATION_PATH"
     )
     for metric in "${EXPECTED_METRICS[@]}"; do SNAPSHOT_ARGUMENTS+=(--metric "$metric"); done
@@ -113,6 +116,44 @@ fi
 SNAPSHOT_VALIDATION_EVIDENCE=''
 [[ -f "$SNAPSHOT_VALIDATION_PATH" ]] && SNAPSHOT_VALIDATION_EVIDENCE="${SNAPSHOT_VALIDATION_PATH:${#REPO_ROOT}}" && SNAPSHOT_VALIDATION_EVIDENCE="${SNAPSHOT_VALIDATION_EVIDENCE#/}"
 CHECKS_JSON+=("$(printf '{\"task\":\"measurement_snapshot_schema\",\"purpose\":\"snapshot_validation\",\"exit_code\":%d,\"result\":%s,\"evidence\":%s}' "$SNAPSHOT_EXIT_CODE" "$(if (( SNAPSHOT_EXIT_CODE == 0 )); then json_escape PASS; else json_escape FAIL; fi)" "$(json_escape "$SNAPSHOT_VALIDATION_EVIDENCE")")")
+
+ENGINE="$SCRIPT_DIR/measurement.py"
+REPORT_RELATIVE="$(get_value report_path)"
+REPORT_VALIDATION_PATH="$RECORD_DIRECTORY/measurement-report-validation.json"
+REPORT_EXIT_CODE=1
+REPORT_EVIDENCE=''
+if ! safe_path "$REPORT_RELATIVE"; then
+    ERRORS+=("measurement.report_path must be repository-relative: $REPORT_RELATIVE")
+elif [[ -z "$PYTHON_EXECUTABLE" ]]; then
+    ERRORS+=("Python 3 is required to generate the measurement report.")
+elif [[ ! -f "$ENGINE" ]]; then
+    ERRORS+=("Measurement engine is missing: $ENGINE")
+else
+    set +e
+    "$PYTHON_EXECUTABLE" "$ENGINE" report --config-path "$CONFIG_PATH" --repo-root "$REPO_ROOT" --output-path "$REPO_ROOT/$REPORT_RELATIVE" --evidence-path "$REPORT_VALIDATION_PATH"
+    REPORT_EXIT_CODE=$?
+    set -e
+    (( REPORT_EXIT_CODE == 0 )) || ERRORS+=("Measurement report generation failed with exit code $REPORT_EXIT_CODE.")
+    [[ -f "$REPO_ROOT/$REPORT_RELATIVE" ]] && REPORT_EVIDENCE="$REPORT_RELATIVE"
+fi
+REPORT_VALIDATION_EVIDENCE=''
+[[ -f "$REPORT_VALIDATION_PATH" ]] && REPORT_VALIDATION_EVIDENCE="${REPORT_VALIDATION_PATH:${#REPO_ROOT}}" && REPORT_VALIDATION_EVIDENCE="${REPORT_VALIDATION_EVIDENCE#/}"
+CHECKS_JSON+=("$(printf '{\"task\":\"measurement_report\",\"purpose\":\"aggregate_report\",\"exit_code\":%d,\"result\":%s,\"evidence\":%s}' "$REPORT_EXIT_CODE" "$(if (( REPORT_EXIT_CODE == 0 )); then json_escape PASS; else json_escape FAIL; fi)" "$(json_escape "$REPORT_VALIDATION_EVIDENCE")")")
+
+REVIEW_VALIDATION_PATH="$RECORD_DIRECTORY/measurement-review-validation.json"
+REVIEW_EXIT_CODE=1
+if (( REPORT_EXIT_CODE == 0 )) && [[ -n "$PYTHON_EXECUTABLE" && -f "$ENGINE" ]]; then
+    set +e
+    "$PYTHON_EXECUTABLE" "$ENGINE" validate-review --config-path "$CONFIG_PATH" --repo-root "$REPO_ROOT" --report-path "$REPO_ROOT/$REPORT_RELATIVE" --evidence-path "$REVIEW_VALIDATION_PATH"
+    REVIEW_EXIT_CODE=$?
+    set -e
+    (( REVIEW_EXIT_CODE == 0 )) || ERRORS+=("Measurement review validation failed with exit code $REVIEW_EXIT_CODE.")
+else
+    ERRORS+=("Measurement review validation was skipped because the report did not pass.")
+fi
+REVIEW_VALIDATION_EVIDENCE=''
+[[ -f "$REVIEW_VALIDATION_PATH" ]] && REVIEW_VALIDATION_EVIDENCE="${REVIEW_VALIDATION_PATH:${#REPO_ROOT}}" && REVIEW_VALIDATION_EVIDENCE="${REVIEW_VALIDATION_EVIDENCE#/}"
+CHECKS_JSON+=("$(printf '{\"task\":\"measurement_review_schema\",\"purpose\":\"improvement_experiment_validation\",\"exit_code\":%d,\"result\":%s,\"evidence\":%s}' "$REVIEW_EXIT_CODE" "$(if (( REVIEW_EXIT_CODE == 0 )); then json_escape PASS; else json_escape FAIL; fi)" "$(json_escape "$REVIEW_VALIDATION_EVIDENCE")")")
 COMMIT_SHA="$(get_commit_sha)"
 TREE_DIGEST="$(get_tree_digest)"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -128,7 +169,7 @@ get_list ai_product_metrics; AI_JSON="$(json_array "${LIST_RESULT[@]}")"
 get_list phase_outcome_metrics; OUTCOME_JSON="$(json_array "${LIST_RESULT[@]}")"
 get_list phase_leading_indicators; LEADING_JSON="$(json_array "${LIST_RESULT[@]}")"
 {
-    printf '{"schema":1,"kind":"sdlc-measurement","command":"scripts/run-measurement.sh","owner":'; json_escape "$(get_value owner)"; printf ',"cadence":'; json_escape "$(get_value cadence)"; printf ',"commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"tree_digest":'; json_escape "$TREE_DIGEST"; printf ',"measured_at":'; json_escape "$TIMESTAMP"; printf ',"snapshot_evidence":'; json_escape "$SNAPSHOT_EVIDENCE"; printf ',"snapshot_validation_evidence":'; json_escape "$SNAPSHOT_VALIDATION_EVIDENCE"; printf ',"metrics":{"baseline":%s,"delivery":%s,"ai_product":%s,"phase_outcomes":%s,"phase_leading_indicators":%s},"exit_code":%d,"result":' "$BASELINE_JSON" "$DELIVERY_JSON" "$AI_JSON" "$OUTCOME_JSON" "$LEADING_JSON" "$EXIT_CODE"; json_escape "$RESULT"; printf ',"checks":[%s],"errors":' "$CHECKS"; json_array "${ERRORS[@]}"; printf '}\n'
+    printf '{"schema":1,"kind":"sdlc-measurement","command":"scripts/run-measurement.sh","model":'; json_escape "$(get_value model)"; printf ',"owner":'; json_escape "$(get_value owner)"; printf ',"cadence":'; json_escape "$(get_value cadence)"; printf ',"commit_sha":'; json_escape "$COMMIT_SHA"; printf ',"tree_digest":'; json_escape "$TREE_DIGEST"; printf ',"measured_at":'; json_escape "$TIMESTAMP"; printf ',"snapshot_evidence":'; json_escape "$SNAPSHOT_EVIDENCE"; printf ',"report_evidence":'; json_escape "$REPORT_EVIDENCE"; printf ',"snapshot_validation_evidence":'; json_escape "$SNAPSHOT_VALIDATION_EVIDENCE"; printf ',"report_validation_evidence":'; json_escape "$REPORT_VALIDATION_EVIDENCE"; printf ',"review_validation_evidence":'; json_escape "$REVIEW_VALIDATION_EVIDENCE"; printf ',"metrics":{"baseline":%s,"delivery":%s,"ai_product":%s,"phase_outcomes":%s,"phase_leading_indicators":%s},"exit_code":%d,"result":' "$BASELINE_JSON" "$DELIVERY_JSON" "$AI_JSON" "$OUTCOME_JSON" "$LEADING_JSON" "$EXIT_CODE"; json_escape "$RESULT"; printf ',"checks":[%s],"errors":' "$CHECKS"; json_array "${ERRORS[@]}"; printf '}\n'
 } > "$RECORD_DIRECTORY/measurement.json"
 if (( RECORD_SPEC == 1 )); then
     set_spec_field measurement_enabled true

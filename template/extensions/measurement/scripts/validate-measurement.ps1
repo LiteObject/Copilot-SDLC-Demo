@@ -84,7 +84,8 @@ if (Test-Path -LiteralPath $baseValidator) {
 
 $errors = New-Object System.Collections.Generic.List[string]
 $requiredValues = @(
-    'owner','cadence','measurement_plan_path','baseline_path','metric_catalog_path',
+    'model','cohort','change_failure_window_days','time_measurement_method','owner','cadence','measurement_plan_path','baseline_path','metric_catalog_path',
+    'catalog_path','event_schema_path','events_path','report_path','experiment_path',
     'privacy_review_path','improvement_log_path','quarterly_review_path','snapshot_path',
     'baseline_task','snapshot_task','review_task'
 )
@@ -96,14 +97,16 @@ $cadence = Get-MeasurementValue -Body $body -Name 'cadence'
 if ($cadence -notin @('monthly', 'quarterly')) { Add-MeasurementError $errors 'measurement.cadence must be monthly or quarterly.' }
 $retention = 0
 if (-not [int]::TryParse((Get-MeasurementValue -Body $body -Name 'retention_days'), [ref]$retention) -or $retention -lt 1) { Add-MeasurementError $errors 'measurement.retention_days must be a positive integer.' }
+$failureWindow = 0
+if (-not [int]::TryParse((Get-MeasurementValue -Body $body -Name 'change_failure_window_days'), [ref]$failureWindow) -or $failureWindow -lt 1) { Add-MeasurementError $errors 'measurement.change_failure_window_days must be a positive integer.' }
 $aiApplicable = Get-MeasurementValue -Body $body -Name 'ai_product_metrics_applicable' -Default 'false'
 if ($aiApplicable -notin @('true', 'false')) { Add-MeasurementError $errors 'measurement.ai_product_metrics_applicable must be true or false.' }
 $requireCompletionGate = Get-MeasurementValue -Body $body -Name 'require_completion_gate' -Default 'false'
 if ($requireCompletionGate -notin @('true', 'false')) { Add-MeasurementError $errors 'measurement.require_completion_gate must be true or false.' }
 
 $requiredMetrics = [ordered]@{
-    baseline_metrics = @('lead_time','deployment_frequency','change_failure_rate','recovery_time','escaped_defects','security_findings','review_cycle_count','flaky_test_rate','rollback_rate')
-    delivery_metrics = @('complete_evidence_rate','agent_suggested_defect_rate','human_rework','review_acceptance_rate','scope_drift_rate','validation_pass_rate','model_tool_policy_violations')
+    baseline_metrics = @('lead_time','deployment_frequency','change_failure_rate','recovery_time','escaped_defects','security_findings','review_cycle_count','flaky_test_rate','rollback_rate','slo_attainment')
+    delivery_metrics = @('complete_evidence_rate','agent_suggested_defect_rate','human_rework','review_acceptance_rate','scope_drift_rate','validation_pass_rate','model_tool_policy_violations','time_saved_or_added')
     phase_outcome_metrics = @('phase0_outcome','phase1_outcome','phase2_outcome','phase3_outcome','phase4_outcome','phase5_outcome','phase6_outcome','phase7_outcome')
     phase_leading_indicators = @('phase0_leading_indicator','phase1_leading_indicator','phase2_leading_indicator','phase3_leading_indicator','phase4_leading_indicator','phase5_leading_indicator','phase6_leading_indicator','phase7_leading_indicator')
 }
@@ -126,7 +129,7 @@ foreach ($metricId in $allMetricIds) {
     if ($metricId -notmatch '^[a-z][a-z0-9_]*$') { Add-MeasurementError $errors "Metric id '$metricId' must use lowercase letters, numbers, and underscores." }
 }
 
-$pathFields = @('measurement_plan_path','baseline_path','metric_catalog_path','privacy_review_path','improvement_log_path','quarterly_review_path','snapshot_path')
+$pathFields = @('measurement_plan_path','baseline_path','metric_catalog_path','catalog_path','event_schema_path','events_path','report_path','experiment_path','privacy_review_path','improvement_log_path','quarterly_review_path','snapshot_path')
 foreach ($name in $pathFields) {
     $path = Get-MeasurementValue -Body $body -Name $name
     if (-not (Test-SafeRelativePath $path)) { Add-MeasurementError $errors "measurement.$name must be repository-relative: $path" }
@@ -136,6 +139,9 @@ $documentPaths = @{
     measurement_plan_path = @('Outcome','leading indicator','cadence','owner','retention','privacy')
     baseline_path = @('Baseline','Definition','Owner','Source','Retention')
     metric_catalog_path = @('Metric ID','Definition','Owner','Source','Retention','Privacy review')
+    catalog_path = @('sdlc-measurement-catalog','dora-ai-v1','metrics')
+    event_schema_path = @('sdlc-measurement-event-schema','common_required','event_types')
+    experiment_path = @('sdlc-measurement-experiments','model','experiments')
     privacy_review_path = @('Data minimization','Sensitive','Personal data','Aggregation','Retention','Access','Review outcome')
     improvement_log_path = @('Observed effect','Regression','Owner','Evidence','Accepted')
     quarterly_review_path = @('Period','Completed improvements','Unresolved risks','Exception trends','Next prioritized roadmap','Regression')
@@ -152,12 +158,28 @@ foreach ($field in @('baseline_task','snapshot_task','review_task')) {
 
 $recordDirectory = Join-Path $RepoRoot $EvidenceDirectory
 New-Item -ItemType Directory -Path $recordDirectory -Force | Out-Null
+$canonicalValidator = Join-Path $PSScriptRoot 'measurement.py'
+$python = Get-Command python -ErrorAction SilentlyContinue
+if ($null -eq $python) { $python = Get-Command python3 -ErrorAction SilentlyContinue }
+if (-not (Test-Path -LiteralPath $canonicalValidator -PathType Leaf)) {
+    Add-MeasurementError $errors "Canonical measurement validator is missing: $canonicalValidator"
+}
+elseif ($null -eq $python) {
+    Add-MeasurementError $errors 'Python 3 is required for the canonical measurement validator.'
+}
+else {
+    & $python.Source $canonicalValidator validate-contract --config-path $ConfigPath --repo-root $RepoRoot --evidence-path (Join-Path $recordDirectory 'measurement-model-validation.json')
+    if ($LASTEXITCODE -ne 0) { Add-MeasurementError $errors 'Canonical measurement model validation failed.' }
+}
 $record = [ordered]@{
     schema = 1
     kind = 'sdlc-measurement-config-validation'
     command = 'scripts/validate-measurement.ps1'
     commit_sha = Get-GitValue -Root $RepoRoot -Arguments @('rev-parse', 'HEAD')
     timestamp = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+    model = Get-MeasurementValue -Body $body -Name 'model'
+    cohort = Get-MeasurementValue -Body $body -Name 'cohort'
+    change_failure_window_days = Get-MeasurementValue -Body $body -Name 'change_failure_window_days'
     owner = Get-MeasurementValue -Body $body -Name 'owner'
     cadence = $cadence
     require_completion_gate = $requireCompletionGate

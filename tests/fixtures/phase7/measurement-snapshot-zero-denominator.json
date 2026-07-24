@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "kind": "sdlc-measurement-snapshot",
+  "model": "dora-ai-v1",
+  "model_version": "dora-ai-v1",
+  "period": {"start": "2030-01-01", "end": "2030-01-31"},
+  "owner": "measurement-owner",
+  "cohort": {"name": "all-services", "field": "service_id"},
+  "privacy_review": "APPROVED",
+  "completeness": {"status": "INCOMPLETE", "score": 0.0, "missing_event_types": [], "late_event_count": 0},
+  "metrics": []
+}

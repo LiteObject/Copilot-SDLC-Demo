@@ -25,7 +25,7 @@ function New-TestRepo {
     Copy-Item (Join-Path $root 'template/base/docs/spec.md') (Join-Path $repo 'docs/spec.md')
     Copy-Item (Join-Path $baseScripts '*') (Join-Path $repo 'scripts') -Force
     Copy-Item (Join-Path $measurementRoot 'scripts/*.ps1') (Join-Path $repo 'scripts') -Force
-    Copy-Item (Join-Path $measurementRoot 'scripts/validate-measurement-snapshot.py') (Join-Path $repo 'scripts')
+    Copy-Item (Join-Path $measurementRoot 'scripts/*.py') (Join-Path $repo 'scripts') -Force
     Copy-Item (Join-Path $root 'tests/fixtures/phase7/write-measurement-snapshot.py') (Join-Path $repo 'scripts')
     Copy-Item (Join-Path $measurementRoot 'docs/*') (Join-Path $repo 'docs') -Force
     & git -C $repo init --quiet
@@ -101,7 +101,59 @@ try {
     $summaryPath = Join-Path $validRepo '.sdlc/evidence/measurement.json'
     Assert-Condition 'measurement evidence exists' (Test-Path -LiteralPath $summaryPath)
     $summary = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json
-    Assert-Condition 'all measurement checks are machine-readable' ($summary.checks.Count -eq 4 -and @($summary.checks | Where-Object { $_.result -ne 'PASS' }).Count -eq 0 -and $summary.snapshot_validation_evidence)
+    Assert-Condition 'all measurement checks are machine-readable' ($summary.checks.Count -eq 6 -and @($summary.checks | Where-Object { $_.result -ne 'PASS' }).Count -eq 0 -and $summary.snapshot_validation_evidence -and $summary.report_validation_evidence -and $summary.review_validation_evidence)
+    $reportPath = Join-Path $validRepo '.sdlc/evidence/measurement-report.json'
+    $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+    Assert-Condition 'measurement report is model-bound and complete' ((Test-Path -LiteralPath $reportPath) -and $report.model -eq 'dora-ai-v1' -and $report.completeness.status -eq 'COMPLETE')
+    Assert-Condition 'catalog formulas all produce report metrics' ($report.metrics.Count -eq 34 -and @($report.metrics | Where-Object { $_.status -ne 'OK' }).Count -eq 0)
+    $deploymentMetric = @($report.metrics | Where-Object { $_.id -eq 'deployment_frequency' })[0]
+    $failureMetric = @($report.metrics | Where-Object { $_.id -eq 'change_failure_rate' })[0]
+    $leadTimeMetric = @($report.metrics | Where-Object { $_.id -eq 'lead_time' })[0]
+    $securityMetric = @($report.metrics | Where-Object { $_.id -eq 'security_findings' })[0]
+    Assert-Condition 'duplicate retries are excluded and rollback is classified' ($deploymentMetric.numerator -eq 2 -and $failureMetric.numerator -eq 1 -and $failureMetric.denominator -eq 2)
+    Assert-Condition 'security findings retain severity breakdowns' ($securityMetric.breakdown.high.value -eq 1 -and $securityMetric.breakdown.low.value -eq 1)
+    Assert-Condition 'timezone boundaries normalize lead time' ($leadTimeMetric.value -eq 90000)
+
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($null -eq $python) { $python = Get-Command python3 -ErrorAction SilentlyContinue }
+    $engine = Join-Path $validRepo 'scripts/measurement.py'
+    $eventSchema = Join-Path $validRepo 'docs/measurement-events.json'
+    $edgeEvents = Join-Path $validRepo '.sdlc/evidence/edge-events.jsonl'
+    Copy-Item (Join-Path $root 'tests/fixtures/phase7/measurement-events-edge.jsonl') $edgeEvents
+    & $python.Source $engine validate-events --events-path $edgeEvents --event-schema-path $eventSchema --model dora-ai-v1 --evidence-path (Join-Path $validRepo '.sdlc/evidence/edge-event-validation.json') *> $null
+    Assert-Condition 'boundary, retry, rollback, and late-event fixture validates' ($LASTEXITCODE -eq 0)
+    $validEvents = Join-Path $validRepo '.sdlc/evidence/measurement-events-valid.jsonl'
+    Copy-Item (Join-Path $validRepo '.sdlc/evidence/measurement-events.jsonl') $validEvents
+    Copy-Item $edgeEvents (Join-Path $validRepo '.sdlc/evidence/measurement-events.jsonl')
+    $edgeReportPath = Join-Path $validRepo '.sdlc/evidence/edge-report.json'
+    & $python.Source $engine report --config-path (Join-Path $validRepo '.github/sdlc-config.yml') --repo-root $validRepo --output-path $edgeReportPath --evidence-path (Join-Path $validRepo '.sdlc/evidence/edge-report-validation.json') *> $null
+    $edgeReport = Get-Content -LiteralPath $edgeReportPath -Raw | ConvertFrom-Json
+    $edgeDeployment = @($edgeReport.metrics | Where-Object { $_.id -eq 'deployment_frequency' })[0]
+    $edgeFailure = @($edgeReport.metrics | Where-Object { $_.id -eq 'change_failure_rate' })[0]
+    Assert-Condition 'edge report deduplicates deployment IDs and records late events' ($LASTEXITCODE -eq 1 -and $edgeDeployment.value -eq 1 -and $edgeFailure.value -eq 1 -and $edgeReport.completeness.late_event_count -eq 1)
+    Copy-Item $validEvents (Join-Path $validRepo '.sdlc/evidence/measurement-events.jsonl') -Force
+
+    $validSnapshot = Join-Path $validRepo '.sdlc/evidence/measurement-snapshot-valid.json'
+    Copy-Item (Join-Path $validRepo '.sdlc/evidence/measurement-snapshot.json') $validSnapshot
+    Copy-Item (Join-Path $root 'tests/fixtures/phase7/measurement-snapshot-zero-denominator.json') (Join-Path $validRepo '.sdlc/evidence/measurement-snapshot.json') -Force
+    $zeroReportPath = Join-Path $validRepo '.sdlc/evidence/zero-denominator-report.json'
+    & $python.Source $engine report --config-path (Join-Path $validRepo '.github/sdlc-config.yml') --repo-root $validRepo --output-path $zeroReportPath --evidence-path (Join-Path $validRepo '.sdlc/evidence/zero-denominator-validation.json') *> $null
+    $zeroReport = Get-Content -LiteralPath $zeroReportPath -Raw | ConvertFrom-Json
+    Assert-Condition 'zero-denominator period is explicit and incomplete' ($LASTEXITCODE -eq 1 -and $zeroReport.completeness.status -eq 'INCOMPLETE' -and (@($zeroReport.metrics | Where-Object { $_.status -eq 'NO_DATA' }).Count -gt 0))
+    Copy-Item $validSnapshot (Join-Path $validRepo '.sdlc/evidence/measurement-snapshot.json') -Force
+
+    $missingEvents = Join-Path $validRepo '.sdlc/evidence/missing-events.jsonl'
+    $privacyEvents = Join-Path $validRepo '.sdlc/evidence/privacy-events.jsonl'
+    Copy-Item (Join-Path $root 'tests/fixtures/phase7/measurement-events-missing-field.jsonl') $missingEvents
+    Copy-Item (Join-Path $root 'tests/fixtures/phase7/measurement-events-privacy.jsonl') $privacyEvents
+    & $python.Source $engine validate-events --events-path $missingEvents --event-schema-path $eventSchema --model dora-ai-v1 --evidence-path (Join-Path $validRepo '.sdlc/evidence/missing-event-validation.json') *> $null
+    Assert-Condition 'missing event fields are rejected' ($LASTEXITCODE -eq 1)
+    & $python.Source $engine validate-events --events-path $privacyEvents --event-schema-path $eventSchema --model dora-ai-v1 --evidence-path (Join-Path $validRepo '.sdlc/evidence/privacy-event-validation.json') *> $null
+    Assert-Condition 'privacy-sensitive event fields are rejected' ($LASTEXITCODE -eq 1 -and (Get-Content -LiteralPath (Join-Path $validRepo '.sdlc/evidence/privacy-event-validation.json') -Raw) -match 'Privacy-sensitive field')
+
+    Copy-Item (Join-Path $root 'tests/fixtures/phase7/measurement-experiments-invalid.json') (Join-Path $validRepo 'docs/measurement-experiments.json') -Force
+    & $python.Source $engine validate-review --config-path (Join-Path $validRepo '.github/sdlc-config.yml') --repo-root $validRepo --report-path $reportPath --evidence-path (Join-Path $validRepo '.sdlc/evidence/invalid-experiment-validation.json') *> $null
+    Assert-Condition 'accepted experiments require a regression check' ($LASTEXITCODE -eq 1 -and (Get-Content -LiteralPath (Join-Path $validRepo '.sdlc/evidence/invalid-experiment-validation.json') -Raw) -match 'regression_check')
     Assert-Condition 'all roadmap phases have both metric types' ($summary.metrics.phase_outcomes.Count -eq 8 -and $summary.metrics.phase_leading_indicators.Count -eq 8)
     $validSpec = Get-Content -LiteralPath (Join-Path $validRepo 'docs/spec.md') -Raw
     Assert-Condition 'measurement gate is recorded' ($validSpec -match '(?m)^gate_measurement_result:\s+PASS\s*$' -and $validSpec -match '(?m)^measurement_enabled:\s+true\s*$')

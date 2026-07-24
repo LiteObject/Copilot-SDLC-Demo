@@ -14,6 +14,16 @@ successful delivery.
 | Privacy reviewer | |
 | Exception approver | |
 
+## Model and Cohort
+
+Measurement model: `dora-ai-v1`
+
+Measurement cohort: `all-services` unless the project declares a narrower
+service or repository cohort in its configuration.
+
+The JSON catalog and event schema are versioned with the configuration. A
+snapshot from another model version cannot be compared or published.
+
 ## Outcome Measures
 
 Outcome measures describe whether the process or product achieved its intended
@@ -32,14 +42,22 @@ Record aggregate values, the measurement period, a source, an owner, a
 definition, a retention rule, and a privacy review decision. Exclude prompts,
 free-form user content, secrets, credentials, and unnecessary personal or
 sensitive data. Document any sampling, denominator, missing-value, or
-exclusion rule.
+exclusion rule. The configured `time_measurement_method` must name how
+time-saved-or-added observations were collected; the method is retained with
+each time-measurement event.
 
 The `measurement_snapshot` task must write the configured snapshot path as a
 JSON document with schema `1` and kind `sdlc-measurement-snapshot`. It must
-include the measurement period, owner, one numeric value and baseline value for
-each configured metric, metric definition, source, retention days, and privacy
-review status. It must also include an approved review with regression review
-and any accepted improvement's observed effect and evidence path.
+include the model version, cohort, measurement period, completeness summary,
+owner, privacy review, one numeric value and baseline value for each configured
+metric, the catalog formula, numeric numerator and denominator, source IDs,
+metric definition, source, retention days, and privacy review status. It must
+also include an approved review with regression review and any accepted
+improvement's observed effect and evidence path.
+
+The report generator reads the configured JSONL events, emits period aggregates
+and cohort series, calculates trend deltas against the snapshot baseline, and
+records confidence and completeness indicators with links to retained evidence.
 
 Set `measurement.require_completion_gate: true` only when the project wants
 measurement evidence required before the SDLC workflow reaches `DONE`. The

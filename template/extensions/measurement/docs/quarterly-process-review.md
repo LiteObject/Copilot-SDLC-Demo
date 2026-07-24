@@ -20,6 +20,16 @@ incident recurrence when applicable.
 List accepted changes to prompts, guardrails, test suites, instructions, tools,
 or requirements and link the observed-effect evidence for each one.
 
+The machine-readable ledger is `docs/measurement-experiments.json`. A tracked
+experiment records an ID, hypothesis, intervention, expected measure, owner,
+observed effect, regression check, retained evidence, and decision. A
+deteriorating metric must have a proposed, continuing, accepted, or rejected
+experiment before the review can pass.
+
+An `ACCEPTED` experiment must include an observed effect and a passing
+`regression_check`; a process change is never declared effective from intent,
+activity, prompt count, or code volume alone.
+
 ## Unresolved Risks
 
 Record residual risks, owners, due dates, and any time-bound exceptions.

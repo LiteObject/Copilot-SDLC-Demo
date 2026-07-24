@@ -1,0 +1,1 @@
+{"event_id":"missing-retry","event_type":"deployment","model":"dora-ai-v1","event_time":"2026-07-01T00:00:00Z","repository_id":"fixture-repository","service_id":"checkout","deployment_id":"missing-retry","change_id":"missing-change","completed_at":"2026-07-01T00:00:00Z","environment":"production","status":"succeeded"}

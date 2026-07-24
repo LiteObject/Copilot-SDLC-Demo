@@ -22,9 +22,9 @@ new_repo() {
     cp "$ROOT/template/base/docs/spec.md" "$repo/docs/spec.md"
     cp "$BASE_SCRIPTS"/* "$repo/scripts/"
     cp "$MEASUREMENT_ROOT/scripts/"*.sh "$repo/scripts/"
-    cp "$MEASUREMENT_ROOT/scripts/validate-measurement-snapshot.py" "$repo/scripts/"
+    cp "$MEASUREMENT_ROOT/scripts/"*.py "$repo/scripts/"
     cp "$ROOT/tests/fixtures/phase7/write-measurement-snapshot.py" "$repo/scripts/"
-    cp "$MEASUREMENT_ROOT/docs/"*.md "$repo/docs/"
+    cp "$MEASUREMENT_ROOT/docs/"* "$repo/docs/"
     git -C "$repo" init -q
     git -C "$repo" config user.email phase7@example.test
     git -C "$repo" config user.name 'Phase 7 Tests'
@@ -91,6 +91,119 @@ set -e
 assert_condition 'measurement checks pass' "$([[ "$measurement_exit" -eq 0 ]] && echo true || echo false)"
 assert_condition 'measurement evidence exists' "$(test -f "$VALID_REPO/.sdlc/evidence/measurement.json" && echo true || echo false)"
 assert_condition 'all measurement checks are machine-readable' "$(grep -Eq 'measurement_baseline' "$VALID_REPO/.sdlc/evidence/measurement.json" && grep -Eq 'measurement_snapshot' "$VALID_REPO/.sdlc/evidence/measurement.json" && grep -Eq 'measurement_review' "$VALID_REPO/.sdlc/evidence/measurement.json" && grep -Eq 'measurement_snapshot_schema' "$VALID_REPO/.sdlc/evidence/measurement.json" && grep -Eq 'measurement-snapshot-validation' "$VALID_REPO/.sdlc/evidence/measurement.json" && grep -Eq '"result":"PASS"' "$VALID_REPO/.sdlc/evidence/measurement.json" && echo true || echo false)"
+assert_condition 'measurement report is model-bound and complete' "$(grep -Eq 'measurement_report' "$VALID_REPO/.sdlc/evidence/measurement.json" && grep -Eq 'measurement-review-validation' "$VALID_REPO/.sdlc/evidence/measurement-review-validation.json" && grep -Eq '"model": "dora-ai-v1"' "$VALID_REPO/.sdlc/evidence/measurement-report.json" && grep -Eq '"status": "COMPLETE"' "$VALID_REPO/.sdlc/evidence/measurement-report.json" && echo true || echo false)"
+PYTHON_EXECUTABLE=''
+for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then PYTHON_EXECUTABLE="$candidate"; break; fi
+done
+REPORT_PATH="$VALID_REPO/.sdlc/evidence/measurement-report.json"
+formula_check="$($PYTHON_EXECUTABLE - "$REPORT_PATH" <<'PY'
+import json
+import sys
+
+report = json.loads(open(sys.argv[1], encoding="utf-8").read())
+print("true" if len(report["metrics"]) == 34 and all(item["status"] == "OK" for item in report["metrics"]) else "false")
+PY
+)"
+assert_condition 'catalog formulas all produce report metrics' "$formula_check"
+classification_check="$($PYTHON_EXECUTABLE - "$REPORT_PATH" <<'PY'
+import json
+import sys
+
+report = json.loads(open(sys.argv[1], encoding="utf-8").read())
+metrics = {item["id"]: item for item in report["metrics"]}
+print("true" if metrics["deployment_frequency"]["numerator"] == 2 and metrics["change_failure_rate"]["numerator"] == 1 and metrics["change_failure_rate"]["denominator"] == 2 else "false")
+PY
+)"
+assert_condition 'duplicate retries are excluded and rollback is classified' "$classification_check"
+severity_check="$($PYTHON_EXECUTABLE - "$REPORT_PATH" <<'PY'
+import json
+import sys
+
+report = json.loads(open(sys.argv[1], encoding="utf-8").read())
+metric = next(item for item in report["metrics"] if item["id"] == "security_findings")
+print("true" if metric["breakdown"]["high"]["value"] == 1 and metric["breakdown"]["low"]["value"] == 1 else "false")
+PY
+)"
+assert_condition 'security findings retain severity breakdowns' "$severity_check"
+timezone_check="$($PYTHON_EXECUTABLE - "$REPORT_PATH" <<'PY'
+import json
+import sys
+
+report = json.loads(open(sys.argv[1], encoding="utf-8").read())
+metric = next(item for item in report["metrics"] if item["id"] == "lead_time")
+print("true" if metric["value"] == 90000 else "false")
+PY
+)"
+assert_condition 'timezone boundaries normalize lead time' "$timezone_check"
+
+ENGINE="$VALID_REPO/scripts/measurement.py"
+EVENT_SCHEMA="$VALID_REPO/docs/measurement-events.json"
+EDGE_EVENTS="$VALID_REPO/.sdlc/evidence/edge-events.jsonl"
+cp "$ROOT/tests/fixtures/phase7/measurement-events-edge.jsonl" "$EDGE_EVENTS"
+set +e
+"$PYTHON_EXECUTABLE" "$ENGINE" validate-events --events-path "$EDGE_EVENTS" --event-schema-path "$EVENT_SCHEMA" --model dora-ai-v1 --evidence-path "$VALID_REPO/.sdlc/evidence/edge-event-validation.json" >/dev/null
+edge_validation_exit=$?
+set -e
+assert_condition 'boundary, retry, rollback, and late-event fixture validates' "$([[ "$edge_validation_exit" -eq 0 ]] && echo true || echo false)"
+VALID_EVENTS="$VALID_REPO/.sdlc/evidence/measurement-events-valid.jsonl"
+cp "$VALID_REPO/.sdlc/evidence/measurement-events.jsonl" "$VALID_EVENTS"
+cp "$EDGE_EVENTS" "$VALID_REPO/.sdlc/evidence/measurement-events.jsonl"
+EDGE_REPORT="$VALID_REPO/.sdlc/evidence/edge-report.json"
+set +e
+"$PYTHON_EXECUTABLE" "$ENGINE" report --config-path "$VALID_REPO/.github/sdlc-config.yml" --repo-root "$VALID_REPO" --output-path "$EDGE_REPORT" --evidence-path "$VALID_REPO/.sdlc/evidence/edge-report-validation.json" >/dev/null
+edge_report_exit=$?
+set -e
+edge_report_check="$($PYTHON_EXECUTABLE - "$EDGE_REPORT" "$edge_report_exit" <<'PY'
+import json
+import sys
+
+report = json.loads(open(sys.argv[1], encoding="utf-8").read())
+metrics = {item["id"]: item for item in report["metrics"]}
+print("true" if int(sys.argv[2]) == 1 and metrics["deployment_frequency"]["value"] == 1 and metrics["change_failure_rate"]["value"] == 1 and report["completeness"]["late_event_count"] == 1 else "false")
+PY
+)"
+assert_condition 'edge report deduplicates deployment IDs and records late events' "$edge_report_check"
+cp "$VALID_EVENTS" "$VALID_REPO/.sdlc/evidence/measurement-events.jsonl"
+
+VALID_SNAPSHOT="$VALID_REPO/.sdlc/evidence/measurement-snapshot-valid.json"
+cp "$VALID_REPO/.sdlc/evidence/measurement-snapshot.json" "$VALID_SNAPSHOT"
+cp "$ROOT/tests/fixtures/phase7/measurement-snapshot-zero-denominator.json" "$VALID_REPO/.sdlc/evidence/measurement-snapshot.json"
+ZERO_REPORT="$VALID_REPO/.sdlc/evidence/zero-denominator-report.json"
+set +e
+"$PYTHON_EXECUTABLE" "$ENGINE" report --config-path "$VALID_REPO/.github/sdlc-config.yml" --repo-root "$VALID_REPO" --output-path "$ZERO_REPORT" --evidence-path "$VALID_REPO/.sdlc/evidence/zero-denominator-validation.json" >/dev/null
+zero_report_exit=$?
+set -e
+zero_report_check="$($PYTHON_EXECUTABLE - "$ZERO_REPORT" "$zero_report_exit" <<'PY'
+import json
+import sys
+
+report = json.loads(open(sys.argv[1], encoding="utf-8").read())
+print("true" if int(sys.argv[2]) == 1 and report["completeness"]["status"] == "INCOMPLETE" and any(item["status"] == "NO_DATA" for item in report["metrics"]) else "false")
+PY
+)"
+assert_condition 'zero-denominator period is explicit and incomplete' "$zero_report_check"
+cp "$VALID_SNAPSHOT" "$VALID_REPO/.sdlc/evidence/measurement-snapshot.json"
+
+MISSING_EVENTS="$VALID_REPO/.sdlc/evidence/missing-events.jsonl"
+PRIVACY_EVENTS="$VALID_REPO/.sdlc/evidence/privacy-events.jsonl"
+cp "$ROOT/tests/fixtures/phase7/measurement-events-missing-field.jsonl" "$MISSING_EVENTS"
+cp "$ROOT/tests/fixtures/phase7/measurement-events-privacy.jsonl" "$PRIVACY_EVENTS"
+set +e
+"$PYTHON_EXECUTABLE" "$ENGINE" validate-events --events-path "$MISSING_EVENTS" --event-schema-path "$EVENT_SCHEMA" --model dora-ai-v1 --evidence-path "$VALID_REPO/.sdlc/evidence/missing-event-validation.json" >/dev/null
+missing_event_exit=$?
+"$PYTHON_EXECUTABLE" "$ENGINE" validate-events --events-path "$PRIVACY_EVENTS" --event-schema-path "$EVENT_SCHEMA" --model dora-ai-v1 --evidence-path "$VALID_REPO/.sdlc/evidence/privacy-event-validation.json" >/dev/null
+privacy_event_exit=$?
+set -e
+assert_condition 'missing event fields are rejected' "$([[ "$missing_event_exit" -eq 1 ]] && echo true || echo false)"
+assert_condition 'privacy-sensitive event fields are rejected' "$([[ "$privacy_event_exit" -eq 1 ]] && grep -Eq 'Privacy-sensitive field' "$VALID_REPO/.sdlc/evidence/privacy-event-validation.json" && echo true || echo false)"
+
+cp "$ROOT/tests/fixtures/phase7/measurement-experiments-invalid.json" "$VALID_REPO/docs/measurement-experiments.json"
+set +e
+"$PYTHON_EXECUTABLE" "$ENGINE" validate-review --config-path "$VALID_REPO/.github/sdlc-config.yml" --repo-root "$VALID_REPO" --report-path "$REPORT_PATH" --evidence-path "$VALID_REPO/.sdlc/evidence/invalid-experiment-validation.json" >/dev/null
+invalid_experiment_exit=$?
+set -e
+assert_condition 'accepted experiments require a regression check' "$([[ "$invalid_experiment_exit" -eq 1 ]] && grep -Eq 'regression_check' "$VALID_REPO/.sdlc/evidence/invalid-experiment-validation.json" && echo true || echo false)"
 assert_condition 'all roadmap phases have both metric types' "$(grep -Eq 'phase0_outcome' "$VALID_REPO/.sdlc/evidence/measurement.json" && grep -Eq 'phase7_outcome' "$VALID_REPO/.sdlc/evidence/measurement.json" && grep -Eq 'phase0_leading_indicator' "$VALID_REPO/.sdlc/evidence/measurement.json" && grep -Eq 'phase7_leading_indicator' "$VALID_REPO/.sdlc/evidence/measurement.json" && echo true || echo false)"
 assert_condition 'measurement gate is recorded' "$(grep -Eq '^gate_measurement_result:[[:space:]]+PASS[[:space:]]*$' "$VALID_REPO/docs/spec.md" && grep -Eq '^measurement_enabled:[[:space:]]+true[[:space:]]*$' "$VALID_REPO/docs/spec.md" && echo true || echo false)"
 

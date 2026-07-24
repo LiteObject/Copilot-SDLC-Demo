@@ -11,6 +11,11 @@ import os
 import sys
 from pathlib import Path
 
+try:
+    import measurement
+except ImportError:  # pragma: no cover - preserves direct use of the legacy validator
+    measurement = None
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -20,6 +25,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--retention-days", required=True, type=int)
     parser.add_argument("--validation-evidence-path", required=True)
     parser.add_argument("--metric", action="append", default=[])
+    parser.add_argument("--config-path")
+    parser.add_argument("--catalog-path")
+    parser.add_argument("--model")
     return parser.parse_args()
 
 
@@ -67,6 +75,56 @@ def validate(args: argparse.Namespace) -> list[str]:
     if document.get("owner") != args.owner:
         add_error(errors, f"Snapshot owner must match configured owner '{args.owner}'.")
 
+    expected_model = args.model
+    catalog: dict[str, dict] = {}
+    if args.config_path and measurement is not None:
+        config = measurement.read_measurement_config(Path(args.config_path))
+        expected_model = expected_model or str(config.get("model", ""))
+        if not args.metric:
+            args.metric = measurement.configured_metric_ids(config)
+        catalog_path = args.catalog_path or config.get("catalog_path")
+        if catalog_path:
+            candidate = Path(args.repo_root) / str(catalog_path)
+            try:
+                loaded_catalog = measurement.load_json(candidate)
+                catalog = {
+                    item.get("id"): item
+                    for item in loaded_catalog.get("metrics", [])
+                    if isinstance(item, dict) and item.get("id")
+                }
+            except (OSError, json.JSONDecodeError) as exc:
+                add_error(errors, f"Measurement catalog could not be loaded: {exc}")
+    if expected_model:
+        if document.get("model") != expected_model:
+            add_error(errors, f"Snapshot model must match '{expected_model}'.")
+        if document.get("model_version") != expected_model:
+            add_error(errors, f"Snapshot model_version must match '{expected_model}'.")
+        cohort = document.get("cohort")
+        if (
+            not isinstance(cohort, dict)
+            or not isinstance(cohort.get("name"), str)
+            or not cohort["name"].strip()
+            or not isinstance(cohort.get("field"), str)
+            or not cohort["field"].strip()
+        ):
+            add_error(errors, "Snapshot cohort must contain a name and field.")
+        completeness = document.get("completeness")
+        if not isinstance(completeness, dict):
+            add_error(errors, "Snapshot completeness must be an object.")
+        else:
+            score = completeness.get("score")
+            if not is_number(score) or not 0 <= score <= 1:
+                add_error(
+                    errors, "Snapshot completeness.score must be between 0 and 1."
+                )
+            if not isinstance(completeness.get("missing_event_types"), list):
+                add_error(
+                    errors,
+                    "Snapshot completeness.missing_event_types must be an array.",
+                )
+        if document.get("privacy_review") != "APPROVED":
+            add_error(errors, "Snapshot privacy_review must be APPROVED.")
+
     period = document.get("period")
     if not isinstance(period, dict):
         add_error(errors, "Snapshot period must contain start and end dates.")
@@ -111,6 +169,61 @@ def validate(args: argparse.Namespace) -> list[str]:
             add_error(errors, f"Metric '{metric_id}' baseline_value must be numeric.")
         if not isinstance(metric.get("unit"), str) or not metric["unit"].strip():
             add_error(errors, f"Metric '{metric_id}' must have a unit.")
+        catalog_metric = catalog.get(metric_id)
+        if catalog_metric:
+            if metric.get("unit") != catalog_metric.get("unit"):
+                add_error(errors, f"Metric '{metric_id}' unit must match the catalog.")
+            if metric.get("formula") != catalog_metric.get("formula"):
+                add_error(
+                    errors, f"Metric '{metric_id}' formula must match the catalog."
+                )
+            if metric.get("owner") != catalog_metric.get("owner"):
+                add_error(
+                    errors, f"Metric '{metric_id}' owner must match the catalog owner."
+                )
+            if not is_number(metric.get("numerator")):
+                add_error(
+                    errors, f"Metric '{metric_id}' numerator must be numeric evidence."
+                )
+            if (
+                not is_number(metric.get("denominator"))
+                or metric.get("denominator") <= 0
+            ):
+                add_error(
+                    errors,
+                    f"Metric '{metric_id}' denominator must be positive numeric evidence.",
+                )
+            source_ids = metric.get("source_ids")
+            if (
+                not isinstance(source_ids, dict)
+                or not isinstance(source_ids.get("event_ids"), list)
+                or any(
+                    not isinstance(item, str) or not item
+                    for item in source_ids["event_ids"]
+                )
+            ):
+                add_error(errors, f"Metric '{metric_id}' must retain source event IDs.")
+            required_source_id_fields = {
+                "lead_time": ("deployment_ids", "change_ids"),
+                "recovery_time": ("incident_ids",),
+                "change_failure_rate": ("deployment_ids",),
+                "rollback_rate": ("deployment_ids",),
+            }.get(metric_id, ())
+            for source_id_field in required_source_id_fields:
+                values = (
+                    source_ids.get(source_id_field)
+                    if isinstance(source_ids, dict)
+                    else None
+                )
+                if (
+                    not isinstance(values, list)
+                    or not values
+                    or any(not isinstance(item, str) or not item for item in values)
+                ):
+                    add_error(
+                        errors,
+                        f"Metric '{metric_id}' must retain {source_id_field} for its formula joins.",
+                    )
         if metric.get("owner") != args.owner:
             add_error(
                 errors, f"Metric '{metric_id}' owner must match the configured owner."

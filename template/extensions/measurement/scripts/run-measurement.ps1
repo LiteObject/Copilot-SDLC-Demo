@@ -161,6 +161,9 @@ else {
             '--repo-root', $RepoRoot,
             '--owner', (Get-MeasurementValue -Body $body -Name 'owner'),
             '--retention-days', (Get-MeasurementValue -Body $body -Name 'retention_days'),
+            '--config-path', $ConfigPath,
+            '--catalog-path', (Join-Path $RepoRoot (Get-MeasurementValue -Body $body -Name 'catalog_path')),
+            '--model', (Get-MeasurementValue -Body $body -Name 'model'),
             '--validation-evidence-path', $snapshotValidationPath
         )
         foreach ($metric in $expectedMetrics) { $snapshotArguments += @('--metric', $metric) }
@@ -178,6 +181,56 @@ $snapshotCheck = [ordered]@{
     evidence = if (Test-Path -LiteralPath $snapshotValidationPath -PathType Leaf) { Get-RelativePath -Root $RepoRoot -Path $snapshotValidationPath } else { '' }
 }
 [void]$checks.Add([pscustomobject]$snapshotCheck)
+
+$python = if ($python) { $python } else { Get-PythonExecutable }
+$enginePath = Join-Path $PSScriptRoot 'measurement.py'
+$reportPath = Get-MeasurementValue -Body $body -Name 'report_path'
+$reportValidationPath = Join-Path $recordDirectory 'measurement-report-validation.json'
+$reportExitCode = 1
+$reportEvidence = ''
+if (-not (Test-SafeRelativePath $reportPath)) {
+    [void]$errors.Add("measurement.report_path must be repository-relative: $reportPath")
+}
+elseif (-not $python) {
+    [void]$errors.Add('Python 3 is required to generate the measurement report.')
+}
+elseif (-not (Test-Path -LiteralPath $enginePath -PathType Leaf)) {
+    [void]$errors.Add("Measurement engine is missing: $enginePath")
+}
+else {
+    $reportFullPath = Join-Path $RepoRoot $reportPath
+    & $python $enginePath report --config-path $ConfigPath --repo-root $RepoRoot --output-path $reportFullPath --evidence-path $reportValidationPath
+    $reportExitCode = $LASTEXITCODE
+    if ($reportExitCode -ne 0) { [void]$errors.Add("Measurement report generation failed with exit code $reportExitCode.") }
+    if (Test-Path -LiteralPath $reportFullPath -PathType Leaf) { $reportEvidence = Get-RelativePath -Root $RepoRoot -Path $reportFullPath }
+}
+$reportCheck = [ordered]@{
+    task = 'measurement_report'
+    purpose = 'aggregate_report'
+    exit_code = $reportExitCode
+    result = if ($reportExitCode -eq 0) { 'PASS' } else { 'FAIL' }
+    evidence = if (Test-Path -LiteralPath $reportValidationPath -PathType Leaf) { Get-RelativePath -Root $RepoRoot -Path $reportValidationPath } else { '' }
+}
+[void]$checks.Add([pscustomobject]$reportCheck)
+
+$reviewValidationPath = Join-Path $recordDirectory 'measurement-review-validation.json'
+$reviewExitCode = 1
+if ($reportExitCode -eq 0 -and $python -and (Test-Path -LiteralPath $enginePath -PathType Leaf)) {
+    & $python $enginePath validate-review --config-path $ConfigPath --repo-root $RepoRoot --report-path (Join-Path $RepoRoot $reportPath) --evidence-path $reviewValidationPath
+    $reviewExitCode = $LASTEXITCODE
+    if ($reviewExitCode -ne 0) { [void]$errors.Add("Measurement review validation failed with exit code $reviewExitCode.") }
+}
+else {
+    [void]$errors.Add('Measurement review validation was skipped because the report did not pass.')
+}
+$reviewCheck = [ordered]@{
+    task = 'measurement_review_schema'
+    purpose = 'improvement_experiment_validation'
+    exit_code = $reviewExitCode
+    result = if ($reviewExitCode -eq 0) { 'PASS' } else { 'FAIL' }
+    evidence = if (Test-Path -LiteralPath $reviewValidationPath -PathType Leaf) { Get-RelativePath -Root $RepoRoot -Path $reviewValidationPath } else { '' }
+}
+[void]$checks.Add([pscustomobject]$reviewCheck)
 $commitSha = Get-GitValue -Root $RepoRoot -Arguments @('rev-parse', 'HEAD')
 $treeDigest = Get-TreeDigest -Root $RepoRoot -SpecRelativePath $specRelativePath
 $checkedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
@@ -187,6 +240,8 @@ $record = [ordered]@{
     schema = 1
     kind = 'sdlc-measurement'
     command = 'scripts/run-measurement.ps1'
+    model = Get-MeasurementValue -Body $body -Name 'model'
+    cohort = Get-MeasurementValue -Body $body -Name 'cohort'
     owner = Get-MeasurementValue -Body $body -Name 'owner'
     cadence = Get-MeasurementValue -Body $body -Name 'cadence'
     feature_id = $FeatureId
@@ -195,7 +250,10 @@ $record = [ordered]@{
     tree_digest = $treeDigest
     measured_at = $checkedAt
     snapshot_evidence = $snapshotEvidence
+    report_evidence = $reportEvidence
     snapshot_validation_evidence = if (Test-Path -LiteralPath $snapshotValidationPath -PathType Leaf) { Get-RelativePath -Root $RepoRoot -Path $snapshotValidationPath } else { '' }
+    report_validation_evidence = if (Test-Path -LiteralPath $reportValidationPath -PathType Leaf) { Get-RelativePath -Root $RepoRoot -Path $reportValidationPath } else { '' }
+    review_validation_evidence = if (Test-Path -LiteralPath $reviewValidationPath -PathType Leaf) { Get-RelativePath -Root $RepoRoot -Path $reviewValidationPath } else { '' }
     metrics = [ordered]@{
         baseline = @(Get-MeasurementList -Body $body -Name 'baseline_metrics')
         delivery = @(Get-MeasurementList -Body $body -Name 'delivery_metrics')

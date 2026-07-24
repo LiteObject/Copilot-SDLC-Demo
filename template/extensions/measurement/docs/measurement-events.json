@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "kind": "sdlc-measurement-event-schema",
+  "model": "dora-ai-v1",
+  "common_required": ["event_id", "event_type", "model", "event_time", "repository_id", "service_id"],
+  "privacy_forbidden_fields": ["prompt", "model_input", "user_input", "user_content", "source_code", "personal_data", "email", "secret", "credential"],
+  "event_types": {
+    "change": {"required": ["change_id", "first_commit_at"]},
+    "deployment": {"required": ["deployment_id", "change_id", "completed_at", "environment", "status", "is_retry"]},
+    "incident": {"required": ["incident_id", "deployment_id", "detected_at", "restored_at", "classification", "paused_seconds"]},
+    "rollback": {"required": ["deployment_id", "classification"]},
+    "hotfix": {"required": ["deployment_id", "classification"]},
+    "failed_release": {"required": ["deployment_id", "classification"]},
+    "defect": {"required": ["defect_id", "change_id", "escaped", "suggested_by_agent"]},
+    "security_finding": {"required": ["finding_id", "severity"]},
+    "test_run": {"required": ["run_id", "flaky"]},
+    "slo": {"required": ["indicator", "value"]},
+    "evidence": {"required": ["change_id", "complete"]},
+    "review": {"required": ["change_id", "accepted_without_change", "cycles"]},
+    "rework": {"required": ["change_id"]},
+    "scope": {"required": ["change_id", "drift"]},
+    "validation": {"required": ["change_id", "passed"]},
+    "policy_violation": {"required": ["change_id", "confirmed"]},
+    "time_measurement": {"required": ["change_id", "seconds_delta", "method"]},
+    "phase_measurement": {"required": ["metric_id", "value"]},
+    "ai_product_measurement": {"required": ["metric_id", "value"]}
+  }
+}

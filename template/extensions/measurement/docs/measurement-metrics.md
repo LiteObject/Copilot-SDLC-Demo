@@ -1,8 +1,22 @@
 # Measurement Metrics Catalog
 
-Each metric has a stable ID, a definition, a named owner, a source, a
-retention rule, and a privacy review. Record aggregate values and the period;
-do not retain unnecessary personal or sensitive content.
+Each metric has a stable ID, a structured formula, a numerator, a denominator,
+an owner, an event source, a cohort, a reporting window, a missing-data rule,
+a retention period, a unit, and a privacy classification. The authoritative
+machine-readable catalog is `docs/measurement-catalog.json` and is versioned
+by `measurement.model` (the template uses `dora-ai-v1`). This Markdown file
+explains the intent; validators use the JSON catalog.
+
+Record aggregate values and the period; do not retain prompts, source code,
+personal data, model inputs, credentials, or unnecessary sensitive content.
+
+## DORA Measures
+
+`lead_time`, `deployment_frequency`, `change_failure_rate`, and
+`recovery_time` use the DORA definitions. The catalog makes the
+deployment, change, and incident joins explicit and declares compatible units.
+`escaped_defects`, `security_findings`, `flaky_test_rate`, `rollback_rate`,
+and `slo_attainment` supplement delivery reliability and quality.
 
 ## Delivery and AI-Assisted Development
 
@@ -10,11 +24,13 @@ do not retain unnecessary personal or sensitive content.
 |---|---|---|---|---|---|
 | `complete_evidence_rate` | Changes with all required evidence divided by changes | | | | |
 | `agent_suggested_defect_rate` | Accepted defects first suggested by an agent divided by changes | | | | |
-| `human_rework` | Human rework attributable to an assisted change | | | | |
+| `human_rework` | Human rework records divided by changes | | | | |
 | `review_acceptance_rate` | Reviews approved without another change cycle | | | | |
 | `scope_drift_rate` | Changes outside the approved file plan divided by changes | | | | |
 | `validation_pass_rate` | Required validation runs that pass on the first attempt | | | | |
-| `model_tool_policy_violations` | Confirmed model or tool policy violations | | | | |
+| `model_tool_policy_violations` | Confirmed policy violations divided by changes | | | | |
+| `review_cycle_count` | Review cycles divided by reviews | | | | |
+| `time_saved_or_added` | Declared seconds saved or added divided by changes | | | | |
 
 ## AI Product Measures
 

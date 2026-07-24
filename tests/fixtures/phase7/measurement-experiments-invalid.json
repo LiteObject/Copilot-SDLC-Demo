@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "kind": "sdlc-measurement-experiments",
+  "model": "dora-ai-v1",
+  "experiments": [
+    {
+      "id": "EXP-INVALID-001",
+      "hypothesis": "A process change will improve lead time.",
+      "intervention": "Change the review workflow.",
+      "expected_measure": {"metric_id": "lead_time_for_changes", "direction": "lower"},
+      "owner": "measurement-owner",
+      "observed_effect": "Not measured.",
+      "regression_check": {"status": "NOT_REVIEWED"},
+      "evidence": "docs/continuous-improvement-log.md",
+      "decision": "ACCEPTED"
+    }
+  ]
+}

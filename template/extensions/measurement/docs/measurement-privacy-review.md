@@ -5,6 +5,9 @@
 Collect only aggregate delivery, quality, safety, and user-impact measures
 needed for the stated improvement question. Do not record prompts, model
 inputs, free-form feedback, secrets, credentials, or unnecessary personal data.
+Event records may retain repository, feature, change, deployment, incident, and
+metric identifiers only as join keys. Aggregated reports link to the retained
+event file without copying raw event payloads.
 
 ## Data Classification
 
